@@ -1,7 +1,13 @@
 
 from datetime import timedelta
-import os
 from pathlib import Path
+import os
+
+
+#======================================================
+NODE_SERVICE_VALIDATION_ENABLED = os.getenv('NODE_SERVICE_VALIDATION_ENABLED', 'True').lower() == 'true'
+#======================================================
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -26,7 +32,6 @@ ALLOWED_HOSTS = ['*']
 # Application definition
 
 INSTALLED_APPS = [
-
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -35,8 +40,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework_simplejwt',
-    'project',
-    'projectsinternal'
+    'nodes',  # Your custom app
 ]
 
 MIDDLEWARE = [
@@ -49,7 +53,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'MS2.urls'
+ROOT_URLCONF = 'MS4.urls'
 
 TEMPLATES = [
     {
@@ -66,7 +70,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'MS2.wsgi.application'
+WSGI_APPLICATION = 'MS4.wsgi.application'
 
 
 # Database
@@ -122,16 +126,18 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
+
 JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')
 
-
-
+# REST Framework
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_AUTHENTICATION_CLASSES": (
-             
-        "project.custom_auth.ForceTokenUserJWTAuthentication", # <<< YOUR CUSTOM AUTH CLASS
+
+   
+        "nodes.custom_auth.ForceTokenUserJWTAuthentication", # <<< YOUR CUSTOM AUTH CLASS
     ),
+    
     'DEFAULT_THROTTLE_CLASSES': (
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle'
@@ -164,7 +170,6 @@ SIMPLE_JWT = {
     """
 
     "USER_ID_CLAIM": "user_id",
-
     "USER_ID_FIELD": "id",
     "TOKEN_USER_CLASS": "rest_framework_simplejwt.models.TokenUser", # Explicitly use TokenUse
 

@@ -43,7 +43,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework_simplejwt',
-    'aimodels'
+    'aimodels',
+    'aimodelsinternal'
 ]
 
 MIDDLEWARE = [
@@ -131,7 +132,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')
-print(JWT_SECRET_KEY)
+
 
 # REST Framework
 REST_FRAMEWORK = {
