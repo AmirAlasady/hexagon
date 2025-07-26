@@ -1,83 +1,56 @@
-# accounts/serializers.py
-from djoser.serializers import (
-    UserCreateSerializer as BaseUserCreateSerializer,
-    UserSerializer as BaseUserSerializer,
-    SetPasswordSerializer as BaseSetPasswordSerializer
-)
 from rest_framework import serializers
-
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
 
 User = get_user_model()
 
-
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-# from rest_framework_simplejwt.tokens import RefreshToken # Not strictly needed for this change
-
-# this iwll make ue customize the serilizer to customize the token
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """
+    Customizes the JWT token claims to include extra user information.
+    This is the core of the contract with other microservices.
+    """
     @classmethod
     def get_token(cls, user):
-        token = super().get_token(user) # Gets the default claims (user_id, exp, jti)
-
+        token = super().get_token(user)
         # Add custom claims
-        token['username'] = user.username # Example: good to have username
-        token['email'] = user.email     # Example: if MS2 might need it without another call
-        token['is_staff'] = user.is_staff # <<< CRITICAL: Add the is_staff status
-
-        # You could add other claims here if needed, e.g.,
-        # token['first_name'] = user.first_name
-        # token['roles'] = list(user.groups.values_list('name', flat=True)) # If using Django groups as roles
+        token['username'] = user.username
+        token['is_staff'] = user.is_staff
         return token
 
-class UserCreateSerializer(BaseUserCreateSerializer):
-    class Meta(BaseUserCreateSerializer.Meta):
+class UserRegistrationSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
+    password2 = serializers.CharField(write_only=True, required=True)
+
+    class Meta:
         model = User
-        fields = ['id', 'email', 'username', 'password']
-        
+        fields = ('email', 'username', 'password', 'password2')
+
     def validate(self, attrs):
-        # This ensures validation happens correctly
-        attrs = super().validate(attrs)
-        # Print validation info
-        print(f"VALIDATION ATTRS: {attrs}")
+        if attrs['password'] != attrs['password2']:
+            raise serializers.ValidationError({"password": "Password fields didn't match."})
         return attrs
-        
+
     def create(self, validated_data):
-        user = super().create(validated_data)
+        user = User.objects.create_user(
+            email=validated_data['email'],
+            username=validated_data['username'],
+            password=validated_data['password']
+        )
         return user
 
-# --- User Serializer for Djoser's general user endpoints ---
-class UserSerializer(BaseUserSerializer):
-    class Meta(BaseUserSerializer.Meta):
+class CurrentUserSerializer(serializers.ModelSerializer):
+    """Serializer for retrieving the current user's data."""
+    class Meta:
         model = User
-        fields = ['id', 'email', 'username', 'is_active']
-        read_only_fields = ['id', 'email', 'is_active']
+        fields = ('id', 'email', 'username', 'is_active', 'date_joined')
 
-
-# --- Specific Action Serializers ---
-class CurrentPasswordMixin(serializers.Serializer):
-    current_password = serializers.CharField(style={'input_type': 'password'}, write_only=True)
+class ChangePasswordSerializer(serializers.Serializer):
+    current_password = serializers.CharField(required=True, write_only=True)
+    new_password = serializers.CharField(required=True, write_only=True, validators=[validate_password])
 
     def validate_current_password(self, value):
         user = self.context['request'].user
         if not user.check_password(value):
-            raise serializers.ValidationError("Current password is incorrect.")
-        return value
-
-class EmailChangeSerializer(CurrentPasswordMixin, serializers.Serializer):
-    new_email = serializers.EmailField()
-
-    def validate_new_email(self, value):
-        user = self.context['request'].user
-        if User.objects.filter(email__iexact=value).exclude(pk=user.pk).exists():
-            raise serializers.ValidationError("This email is already in use by another account.")
-        return value
-
-class UsernameChangeSerializer(CurrentPasswordMixin, serializers.Serializer):
-    new_username = serializers.CharField(max_length=User._meta.get_field('username').max_length)
-
-    def validate_new_username(self, value):
-        user = self.context['request'].user
-        if User.objects.filter(username__iexact=value).exclude(pk=user.pk).exists():
-            raise serializers.ValidationError("This username is already in use.")
+            raise serializers.ValidationError("Current password is not correct.")
         return value

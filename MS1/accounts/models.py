@@ -1,60 +1,43 @@
-import uuid  # Import the uuid module
+import uuid
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 
-# Your UserManager remains the same, it doesn't care about the PK type.
 class UserManager(BaseUserManager):
-    def create_user(self, email, password=None, **extra_fields):
+    def create_user(self, email, username, password=None, **extra_fields):
         if not email:
             raise ValueError("The Email field must be set")
+        if not username:
+            raise ValueError("The Username field must be set")
 
         email = self.normalize_email(email)
-        user = self.model(email=email, **extra_fields)
+        user = self.model(email=email, username=username, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
         return user
 
-    def create_superuser(self, email, password=None, **extra_fields):
+    def create_superuser(self, email, username, password=None, **extra_fields):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
 
         if extra_fields.get("is_staff") is not True:
-            raise ValueError("Super user must have is_staff = True")
-
+            raise ValueError("Superuser must have is_staff=True.")
         if extra_fields.get("is_superuser") is not True:
-            raise ValueError("Super user must have is_superuser = True")
+            raise ValueError("Superuser must have is_superuser=True.")
 
-        return self.create_user(email, password, **extra_fields)
+        return self.create_user(email, username, password, **extra_fields)
 
-# We add PermissionsMixin for standard Django permission handling, which is good practice.
 class User(AbstractBaseUser, PermissionsMixin):
-    # --- THE KEY CHANGE IS HERE ---
-    # We define 'id' as our primary key.
-    id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
-        help_text="Unique identifier for the user, used across all services."
-    )
-    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True, max_length=255)
-    username = models.CharField(max_length=50, unique=True)
-
-    
-    is_active = models.BooleanField(default=True)
+    username = models.CharField(max_length=150, unique=True)
+    is_active = models.BooleanField(default=True, help_text="Designates whether this user should be treated as active. Unselect this instead of deleting accounts.")
     is_staff = models.BooleanField(default=False)
-    
-    is_superuser = models.BooleanField(default=False)
-    
     date_joined = models.DateTimeField(auto_now_add=True)
-
-    USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = ['username']
 
     objects = UserManager()
 
-    def get_full_name(self):
-        return f"{self.first_name} {self.last_name}"
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = ['username']
 
     def __str__(self):
         return self.email

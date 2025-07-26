@@ -1,10 +1,25 @@
 from django.db import models
 import uuid
 
+
+class ProjectStatus(models.TextChoices):
+    ACTIVE = 'active', 'Active'
+    PENDING_DELETION = 'pending_deletion', 'Pending Deletion'
+
 # Create your models here.
 class Project(models.Model):
-   
+
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # <<< ADD THIS FIELD
+    status = models.CharField(
+        max_length=20,
+        choices=ProjectStatus.choices,
+        default=ProjectStatus.ACTIVE,
+        db_index=True,
+        help_text="The current status of the project (e.g., active, pending deletion)."
+    )
 
     name = models.CharField(
         max_length=255,

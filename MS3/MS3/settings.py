@@ -44,7 +44,8 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'aimodels',
-    'aimodelsinternal'
+    'aimodelsinternal',
+    'messaging' 
 ]
 
 MIDDLEWARE = [
@@ -186,3 +187,8 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": False, 
 
 }
+
+
+
+# RabbitMQ Settings
+RABBITMQ_URL = os.getenv('RABBITMQ_URL', 'amqp://guest:guest@localhost:5672/')

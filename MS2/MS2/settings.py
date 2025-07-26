@@ -36,7 +36,8 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'project',
-    'projectsinternal'
+    'projectsinternal',
+    'messaging'
 ]
 
 MIDDLEWARE = [
@@ -174,3 +175,6 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": False, 
 
 }
+
+
+RABBITMQ_URL = os.getenv('RABBITMQ_URL', 'amqp://guest:guest@localhost:5672/')

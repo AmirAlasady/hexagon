@@ -1,21 +1,14 @@
-# accounts/api_urls.py
-from django.urls import include, path
+from django.urls import path
+from rest_framework_simplejwt.views import TokenRefreshView
 from .api_views import (
-    EmailChangeView,
-    UsernameChangeView, 
+    UserRegistrationView,
+    CustomTokenObtainPairView,
+    CurrentUserView,
 )
 
-# Define custom urlpatterns first for clarity
-custom_urlpatterns = [
-    path('account/change-email/', EmailChangeView.as_view(), name='api-account-change-email'),
-    path('account/change-username/', UsernameChangeView.as_view(), name='api-account-change-username'),
-]
-
 urlpatterns = [
-    # Djoser core endpoints
-    path('', include('djoser.urls')),
-    # Djoser JWT endpoints
-    path('', include('djoser.urls.jwt')),
-    # Your custom endpoints
-    path('', include(custom_urlpatterns)),
+    path('register/', UserRegistrationView.as_view(), name='user-register'),
+    path('token/', CustomTokenObtainPairView.as_view(), name='token-create'),
+    path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
+    path('me/', CurrentUserView.as_view(), name='current-user'),
 ]
