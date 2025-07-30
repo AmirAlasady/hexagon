@@ -1,0 +1,41 @@
+# This is the single source of truth for all Python dependencies.
+
+# Core Django and REST Framework
+Django==5.2.4
+djangorestframework==3.16.0
+sqlparse==0.5.3
+
+# Authentication & JWT
+djangorestframework-simplejwt==5.5.1
+djoser==2.3.3
+PyJWT==2.10.1
+oauthlib==3.2.2
+requests-oauthlib==2.0.0
+python3-openid==3.2.0
+social-auth-app-django==5.5.1
+social-auth-core==4.7.0
+
+# Asynchronous Support (use the latest version)
+asgiref==3.9.1
+
+# Utilities
+python-dotenv==1.0.1
+pika
+gunicorn
+jsonschema
+httpx
+
+# Web Dependencies
+requests==2.32.3
+urllib3==2.5.0
+idna==3.10
+charset-normalizer==3.4.2
+certifi==2025.7.14
+
+# Other
+cryptography==45.0.5
+cffi==1.17.1
+pycparser==2.22
+pillow==11.3.0
+defusedxml==0.7.1
+tzdata==2025.2

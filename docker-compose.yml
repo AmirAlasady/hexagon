@@ -1,0 +1,149 @@
+version: '3.8'
+
+services:
+  base:
+    build: { context: ., dockerfile: Dockerfile.base }
+    image: ai_engine_base:latest
+
+  gateway:
+    build: ./gateway
+    ports: ["80:80"]
+    volumes: ["static_volume:/vol/static"]
+    networks: ["ai_engine_net"]
+    depends_on:
+      # --- THE FIX IS HERE ---
+      # Wait for each service to be 'healthy' before starting the gateway
+      auth_service_api: { condition: service_healthy }
+      project_service_api: { condition: service_healthy }
+      model_service_api: { condition: service_healthy }
+      node_service_api: { condition: service_healthy }
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    hostname: rabbitmq
+    ports: ["15672:15672"]
+    env_file: ./.env.docker
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running", "-q"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    volumes: ["rabbitmq_data:/var/lib/rabbitmq/"]
+    networks: ["ai_engine_net"]
+
+  auth_service_api:
+    build: { context: ./MS1, args: { DJANGO_PROJECT_NAME: MS1 } }
+    image: auth_service_api:latest
+    volumes: ["./MS1/db.sqlite3:/app/db.sqlite3", "static_volume:/app/staticfiles"]
+    env_file: ./.env.docker
+    networks: ["ai_engine_net"]
+    depends_on: { base: { condition: service_completed_successfully }, rabbitmq: { condition: service_healthy } }
+    healthcheck:
+      # This command checks if the service is responding to requests
+      test: ["CMD", "curl", "-f", "http://localhost:8000/admin/login/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ... auth_service_worker (no healthcheck needed for workers) ...
+  auth_service_worker:
+    build: ./MS1
+    image: auth_service_worker:latest
+    command: python manage.py run_user_saga_finalizer
+    volumes: ["./MS1/db.sqlite3:/app/db.sqlite3"]
+    env_file: ./.env.docker
+    networks: ["ai_engine_net"]
+    depends_on: { base: { condition: service_completed_successfully }, rabbitmq: { condition: service_healthy } }
+
+  project_service_api:
+    build: { context: ./MS2, args: { DJANGO_PROJECT_NAME: MS2 } }
+    image: project_service_api:latest
+    volumes: ["./MS2/db.sqlite3:/app/db.sqlite3", "static_volume:/app/staticfiles"]
+    env_file: ./.env.docker
+    networks: ["ai_engine_net"]
+    depends_on: { base: { condition: service_completed_successfully }, rabbitmq: { condition: service_healthy } }
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/admin/login/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ... all project_service workers (no healthcheck needed) ...
+
+  model_service_api:
+    build: { context: ./MS3, args: { DJANGO_PROJECT_NAME: MS3 } }
+    image: model_service_api:latest
+    volumes: ["./MS3/db.sqlite3:/app/db.sqlite3", "static_volume:/app/staticfiles"]
+    env_file: ./.env.docker
+    networks: ["ai_engine_net"]
+    depends_on: { base: { condition: service_completed_successfully }, rabbitmq: { condition: service_healthy } }
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/admin/login/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ... model_service_worker (no healthcheck needed) ...
+
+  node_service_api:
+    build: { context: ./MS4, args: { DJANGO_PROJECT_NAME: MS4 } }
+    image: node_service_api:latest
+    volumes: ["./MS4/db.sqlite3:/app/db.sqlite3", "static_volume:/app/staticfiles"]
+    env_file: ./.env.docker
+    networks: ["ai_engine_net"]
+    depends_on:
+      base: { condition: service_completed_successfully }
+      rabbitmq: { condition: service_healthy }
+      # Ensure node service also waits for its dependencies to be healthy
+      project_service_api: { condition: service_healthy }
+      model_service_api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/admin/login/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ... all other workers (no healthcheck needed) ...
+  project_service_saga_worker:
+    build: ./MS2
+    image: project_service_saga_worker:latest
+    command: python manage.py run_saga_finalizer_worker
+    volumes: ["./MS2/db.sqlite3:/app/db.sqlite3"]
+    env_file: ./.env.docker
+    networks: ["ai_engine_net"]
+    depends_on: { base: { condition: service_completed_successfully }, rabbitmq: { condition: service_healthy } }
+
+  project_service_cleanup_worker:
+    build: ./MS2
+    image: project_service_cleanup_worker:latest
+    command: python manage.py run_user_cleanup_initiator
+    volumes: ["./MS2/db.sqlite3:/app/db.sqlite3"]
+    env_file: ./.env.docker
+    networks: ["ai_engine_net"]
+    depends_on: { base: { condition: service_completed_successfully }, rabbitmq: { condition: service_healthy } }
+
+  model_service_worker:
+    build: ./MS3
+    image: model_service_worker:latest
+    command: python manage.py run_user_cleanup_worker
+    volumes: ["./MS3/db.sqlite3:/app/db.sqlite3"]
+    env_file: ./.env.docker
+    networks: ["ai_engine_net"]
+    depends_on: { base: { condition: service_completed_successfully }, rabbitmq: { condition: service_healthy } }
+
+  node_service_worker:
+    build: ./MS4
+    image: node_service_worker:latest
+    command: python manage.py run_project_cleanup_worker
+    volumes: ["./MS4/db.sqlite3:/app/db.sqlite3"]
+    env_file: ./.env.docker
+    networks: ["ai_engine_net"]
+    depends_on: { base: { condition: service_completed_successfully }, rabbitmq: { condition: service_healthy } }
+
+networks:
+  ai_engine_net:
+    driver: bridge
+
+volumes:
+  rabbitmq_data:
+  static_volume:

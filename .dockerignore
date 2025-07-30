@@ -1,0 +1,32 @@
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Django stuff
+*.log
+db.sqlite3
+db.sqlite3-journal
+media/
+
+# Environment files
+.env
+.env.*
+env/
+venv/
+.venv/
+
+# IDE files
+.idea/
+.vscode/
+
+# Test reports
+.coverage
+.cache
