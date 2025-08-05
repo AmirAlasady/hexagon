@@ -6,6 +6,7 @@ from django.core.management.base import BaseCommand
 # Import the model from the aimodels app and the publisher from the messaging app
 from aimodels.models import AIModel
 from messaging.event_publisher import aimodel_event_publisher
+from django.conf import settings
 
 def handle_user_deletion(user_id: str):
     """
@@ -41,8 +42,8 @@ class Command(BaseCommand):
     help = 'Runs a RabbitMQ worker to listen for user deletion events.'
 
     def handle(self, *args, **options):
-        rabbitmq_url = 'amqp://guest:guest@localhost:5672/'
-        
+        rabbitmq_url = settings.RABBITMQ_URL
+
         while True:
             try:
                 connection = pika.BlockingConnection(pika.URLParameters(rabbitmq_url))

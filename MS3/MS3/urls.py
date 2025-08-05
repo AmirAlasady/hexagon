@@ -2,9 +2,10 @@ from django.contrib import admin
 from django.urls import path, include
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
-    path('ms3/api/v1/', include('aimodels.urls')),
-
-    # Internal API for MS3
-    path('ms3/internal/v1/', include('aimodelsinternal.internal_urls')),
+    # Wrap all paths under the 'ms3/' prefix
+    path('ms3/', include([
+        path('admin/', admin.site.urls),
+        path('api/v1/', include('aimodels.urls')),
+        path('internal/v1/', include('aimodelsinternal.internal_urls')),
+    ]))
 ]

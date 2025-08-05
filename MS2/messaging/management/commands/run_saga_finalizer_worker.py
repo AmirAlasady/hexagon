@@ -5,7 +5,7 @@ import json
 import time
 from django.core.management.base import BaseCommand
 from django.db import transaction
-
+from django.conf import settings
 # --- FIX IS HERE ---
 # Use an absolute import path from the top-level app name.
 # Django knows where to find the 'projects' and 'messaging' apps.
@@ -18,8 +18,8 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         # In production, you would use a variable from settings.py for the RabbitMQ URL
         # For simplicity, we hardcode it here.
-        rabbitmq_url = 'amqp://guest:guest@localhost:5672/'
-        
+        rabbitmq_url = settings.RABBITMQ_URL
+
         while True:
             try:
                 self.stdout.write('Connecting to RabbitMQ...')

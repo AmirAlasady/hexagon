@@ -23,3 +23,10 @@ tzdata==2025.2
 urllib3==2.5.0
 jsonschema
 dotenv
+grpcio
+grpcio-tools
+protobuf
+google-api-python-client
+pika
+httpx
+json

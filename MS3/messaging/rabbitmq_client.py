@@ -15,7 +15,7 @@ class RabbitMQClient:
     def _connect(self):
         """Establishes connection and channel if they don't exist."""
         if not self._connection or self._connection.is_closed:
-            params = pika.URLParameters('amqp://guest:guest@localhost:5672/')
+            params = pika.URLParameters(settings.RABBITMQ_URL)
             self._connection = pika.BlockingConnection(params)
             self._channel = self._connection.channel()
             # This service needs to publish to the user_events exchange

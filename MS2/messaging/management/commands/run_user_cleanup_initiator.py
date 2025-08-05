@@ -5,7 +5,7 @@ import json
 import time
 from django.core.management.base import BaseCommand
 from django.db import transaction
-
+from django.conf import settings
 from project.models import Project, ProjectStatus
 from messaging.models import Saga, SagaStep
 from messaging.event_publisher import event_publisher
@@ -42,7 +42,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         while True:
             try:
-                connection = pika.BlockingConnection(pika.URLParameters('amqp://guest:guest@localhost:5672/'))
+                connection = pika.BlockingConnection(pika.URLParameters(settings.RABBITMQ_URL))
                 channel = connection.channel()
                 
                 channel.exchange_declare(exchange='user_events', exchange_type='topic', durable=True)

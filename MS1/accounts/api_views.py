@@ -60,7 +60,7 @@ class CurrentUserView(APIView):
                 # 2. Create the saga state tracker
                 saga = UserSaga.objects.create(user_id=user.id)
                 # Define which services need to confirm cleanup
-                services_to_confirm = ['ProjectService', 'AIModelService'] # Add more as your system grows
+                services_to_confirm = ['ProjectService', 'AIModelService', 'ToolService'] # Add more as your system grows
                 for service_name in services_to_confirm:
                     UserSagaStep.objects.create(saga=saga, service_name=service_name)
 

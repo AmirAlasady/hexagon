@@ -2,15 +2,11 @@
 from django.contrib import admin
 from django.urls import path, include
 
-
-
 urlpatterns = [
-    path('admin/', admin.site.urls),
-
-    path('ms2/api/v1/', include('project.urls')),
-
-
-    # internal API 
-    path('ms2/internal/v1/', include('projectsinternal.internal_urls')),
+    # Wrap all paths under the 'ms2/' prefix
+    path('ms2/', include([
+        path('admin/', admin.site.urls),
+        path('api/v1/', include('project.urls')),
+        path('internal/v1/', include('projectsinternal.internal_urls')),
+    ]))
 ]
-

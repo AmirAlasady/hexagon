@@ -1,5 +1,5 @@
 from django.urls import path
-from .internal_views import ModelValidationView, ModelConfigurationView
+from .internal_views import ModelValidationView, ModelConfigurationView, ModelCapabilitiesView
 
 urlpatterns = [
     # For the Node Service to check if a user can use a model
@@ -7,4 +7,6 @@ urlpatterns = [
     
     # For the Inference Orchestrator to get the full, decrypted config
     path('models/<uuid:model_id>/config', ModelConfigurationView.as_view(), name='internal-model-config'),
+
+    path('models/<uuid:model_id>/capabilities/', ModelCapabilitiesView.as_view(), name='internal-model-capabilities'),
 ]

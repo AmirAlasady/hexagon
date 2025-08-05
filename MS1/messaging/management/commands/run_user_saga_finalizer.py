@@ -8,12 +8,13 @@ from django.db import transaction
 # Correctly importing the models defined in accounts/models.py
 from accounts.models import User
 from messaging.models import UserSaga, UserSagaStep
+from django.conf import settings
 
 class Command(BaseCommand):
     help = 'Runs a worker to finalize user deletion sagas.'
 
     def handle(self, *args, **options):
-        connection = pika.BlockingConnection(pika.URLParameters('amqp://guest:guest@localhost:5672/'))
+        connection = pika.BlockingConnection(pika.URLParameters(settings.RABBITMQ_URL))
         channel = connection.channel()
 
         # Declare exchanges this worker needs to listen to

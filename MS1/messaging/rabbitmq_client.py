@@ -17,7 +17,7 @@ class RabbitMQClient:
         """Establishes connection and channel if they don't exist."""
         if not self._connection or self._connection.is_closed:
             # In production, use settings.RABBITMQ_URL or individual host/port/creds
-            params = pika.URLParameters('amqp://guest:guest@localhost:5672/')
+            params = pika.URLParameters(settings.RABBITMQ_URL)
             self._connection = pika.BlockingConnection(params)
             self._channel = self._connection.channel()
             # Declare exchanges to ensure they exist. This is idempotent.

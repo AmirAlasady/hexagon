@@ -1,0 +1,12 @@
+Django
+djangorestframework
+djangorestframework-simplejwt
+python-dotenv
+pika
+
+PyJWT
+grpcio
+grpcio-tools
+protobuf
+google-api-python-client
+dotenv

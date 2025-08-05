@@ -123,7 +123,8 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -192,3 +193,6 @@ SIMPLE_JWT = {
 
 # RabbitMQ Settings
 RABBITMQ_URL = os.getenv('RABBITMQ_URL', 'amqp://guest:guest@localhost:5672/')
+
+# Node Service URL
+NODE_SERVICE_URL = os.getenv('NODE_SERVICE_URL', 'http://localhost:8003')
