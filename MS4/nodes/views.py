@@ -69,17 +69,21 @@ class NodeConfigureModelAPIView(APIView):
         return node
 
     def post(self, request, pk):
+        print(f"Configuring model for node with ID: {pk}")
         node = self.get_object(pk)
+        print(f"Node found: {node.id}")
         serializer = NodeConfigureModelSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         service = NodeService()
         try:
+            print(f"Configuring node {node.id} with model ID: {serializer.validated_data['model_id']}")
             configured_node = service.configure_node_model(
                 jwt_token=str(request.auth),
                 node=node,
                 model_id=serializer.validated_data['model_id']
             )
+            print(f"Node {node.id} configured successfully with model ID: {serializer.validated_data['model_id']}")
             response_serializer = NodeSerializer(configured_node)
             return Response(response_serializer.data, status=status.HTTP_200_OK)
         except (PermissionDenied, NotFound, ValidationError) as e:
@@ -162,6 +166,8 @@ class NodeDetailAPIView(APIView):
 
 # --- INTERNAL WEBHOOK VIEW ---
 
+
+"""
 class IsInternalServicePermission(permissions.BasePermission):
     def has_permission(self, request, view):
         # In a real system, this would be more robust (e.g., shared secret header).
@@ -189,16 +195,19 @@ class ResourceDeletionHookAPIView(APIView):
             message = f"Inactivated {updated_count} nodes."
         elif resource_type == 'tool':
             # SQLite-compatible workaround
+            print("Checking tool configurations...")
             candidate_nodes = Node.objects.select_for_update().filter(
                 status__in=[NodeStatus.ACTIVE, NodeStatus.ALTERED],
                 configuration__has_key='tool_config',
                 configuration__tool_config__has_key='tool_ids'
             )
             nodes_to_process = []
+            print(f"Found {candidate_nodes.count()} candidate nodes.")
             for node in candidate_nodes:
                 tool_ids = node.configuration.get('tool_config', {}).get('tool_ids', [])
                 if isinstance(tool_ids, list) and resource_id in tool_ids:
                     nodes_to_process.append(node)
+            print(f"Nodes to process: {len(nodes_to_process)}")
             if nodes_to_process:
                 for node in nodes_to_process:
                     node.configuration['tool_config']['tool_ids'].remove(resource_id)
@@ -208,8 +217,9 @@ class ResourceDeletionHookAPIView(APIView):
             message = f"Removed tool and altered {updated_count} nodes."
         else:
              return Response({"error": f"Unknown resource_type: {resource_type}"}, status=status.HTTP_400_BAD_REQUEST)
-
+        print(f"Processed {updated_count} nodes for resource type '{resource_type}' with ID '{resource_id}'.")
         return Response(
             {"message": f"Processed deletion for {resource_type}:{resource_id}. {message}"},
             status=status.HTTP_200_OK
         )
+"""

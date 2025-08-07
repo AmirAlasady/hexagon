@@ -12,5 +12,10 @@ class ToolEventPublisher:
             routing_key=event_name,
             body=payload
         )
-
+    def publish_tool_deleted(self, tool_id: str):
+        rabbitmq_client.publish(
+            exchange_name='resource_events',
+            routing_key='tool.deleted',
+            body={"tool_id": tool_id}
+        )
 tool_event_publisher = ToolEventPublisher()

@@ -12,6 +12,7 @@ from .models import AIModel
 from .services import AIModelService
 from .serializers import AIModelSerializer, AIModelCreateSerializer, AIModelUpdateSerializer
 from .permissions import IsOwnerOrReadOnly
+from messaging.event_publisher import aimodel_event_publisher  # Add this import if aimodel_event_publisher is defined in events.py
 
 class AIModelListCreateAPIView(APIView):
     """
@@ -79,56 +80,58 @@ class AIModelDetailAPIView(APIView):
 
     def put(self, request, pk):
         """ Handles PUT requests to update a model. """
+        # --- THE CHANGE IS HERE: Capture the state BEFORE the update ---
+        try:
+            model_to_update = self.service.get_model_by_id(model_id=pk, user_id=request.user.id)
+            old_capabilities = set(model_to_update.capabilities)
+        except (ValidationError, PermissionDenied):
+             # If the model doesn't exist or isn't accessible, we can't get old caps.
+             # This is fine, we just won't be able to compare later.
+            old_capabilities = set()
+        # --- END OF CHANGE ---
+
         serializer = AIModelUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         try:
+            # The validated_data now contains 'name', 'configuration', and optionally 'capabilities'
             updated_model = self.service.update_user_model(
                 model_id=pk,
                 user_id=request.user.id,
-                **serializer.validated_data
+                **serializer.validated_data # <-- Pass all validated data using **
             )
+            
+            # --- EVENT PUBLISHING LOGIC ---
+            new_capabilities = set(updated_model.capabilities)
+            print(f"DEBUG: Old capabilities: {old_capabilities}, New capabilities: {new_capabilities}")
+            if old_capabilities != new_capabilities:
+                print(f"INFO: Capabilities changed for model {pk}. Publishing event.")
+                try:
+                    print(f"nnnnnnnnnnnnnnnnnnged for model {pk}. Publishing event.")
+                    aimodel_event_publisher.publish_capabilities_updated(
+                        model_id=str(updated_model.id),
+                        new_capabilities=list(new_capabilities)
+                    )
+                except Exception as e:
+                    print(f"CRITICAL ALERT: Model {pk} capabilities updated, but event publishing failed: {e}")
+            # --- END OF EVENT LOGIC ---
+
             response_serializer = AIModelSerializer(updated_model)
             return Response(response_serializer.data)
         except (ValidationError, PermissionDenied) as e:
             return Response({"error": str(e)}, status=e.status_code)
 
     def delete(self, request, pk):
-        auth_header = request.headers.get('Authorization')
-        if not auth_header:
-            return Response({"error": "Authorization header missing."}, status=status.HTTP_401_UNAUTHORIZED)
-        
-        # --- THE FIX: REVERSE THE ORDER OF OPERATIONS ---
-        
-        # STEP 1: ATTEMPT THE DELETION FIRST
-        # The service layer contains all the critical business logic and validation.
+        # STEP 1: Attempt the deletion and perform all validation first.
         try:
             self.service.delete_user_model(model_id=pk, user_id=request.user.id)
-        except PermissionDenied as e:
-            # This will catch "System models cannot be deleted." and "You do not own this model."
-            # The process stops here, and no hook is ever called.
-            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
-        except ValidationError as e:
-            # This will catch "Model not found."
-            return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
-            
-        # STEP 2: IF DELETION SUCCEEDED, CALL THE CLEANUP HOOK
-        # This code is only reached if the model was successfully deleted from the database.
+        except (PermissionDenied, ValidationError) as e:
+            return Response({"error": str(e)}, status=e.status_code)
+
+        # STEP 2: If successful, publish the 'model.deleted' event.
         try:
-            with httpx.Client(timeout=10.0) as client:
-                hook_url = f"{settings.NODE_SERVICE_URL}/ms4/api/v1/hooks/resource-deleted/"
-                payload = {"resource_type": "model", "resource_id": str(pk)}
-                headers = {"Authorization": auth_header}
-                
-                response = client.post(hook_url, json=payload, headers=headers)
-                response.raise_for_status()
-        except (httpx.RequestError, httpx.HTTPStatusError) as e:
-            # The model was deleted, but the cleanup failed. This is a state that
-            # requires monitoring and possibly manual intervention.
-            # We should log this as a critical error.
-            print(f"CRITICAL ALERT: Model {pk} was deleted, but the Node Service cleanup hook failed: {e}")
-            # We still return a success to the user, because the primary resource was deleted.
-            # The system will self-heal the next time a user tries to run the node.
-            
-        # STEP 3: RETURN SUCCESS TO THE USER
+            aimodel_event_publisher.publish_model_deleted(model_id=str(pk))
+        except Exception as e:
+            print(f"CRITICAL ALERT: Model {pk} was deleted, but 'model.deleted' event publishing failed: {e}")
+
         return Response(status=status.HTTP_204_NO_CONTENT)

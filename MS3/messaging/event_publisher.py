@@ -1,23 +1,24 @@
 from .rabbitmq_client import rabbitmq_client
 
 class AIModelEventPublisher:
-    """Publishes events related to the AIModel service."""
-
-    def publish_resource_for_user_deleted(self, user_id: str):
+    def publish_model_deleted(self, model_id: str):
         """
-        Publishes a confirmation that all AIModels for a given user
-        have been successfully deleted.
+        Announces that a model has been permanently deleted.
         """
-        event_name = "resource.for_user.deleted.AIModelService"
-        payload = {
-            "user_id": str(user_id),
-            "service_name": "AIModelService"
-        }
         rabbitmq_client.publish(
-            exchange_name='user_events',
-            routing_key=event_name,
-            body=payload
+            exchange_name='resource_events',
+            routing_key='model.deleted',
+            body={"model_id": model_id}
         )
 
-# Create a globally accessible instance
+    def publish_capabilities_updated(self, model_id: str, new_capabilities: list):
+        """
+        Announces that a model's capabilities have changed.
+        """
+        rabbitmq_client.publish(
+            exchange_name='resource_events',
+            routing_key='model.capabilities.updated',
+            body={"model_id": model_id, "new_capabilities": new_capabilities}
+        )
+
 aimodel_event_publisher = AIModelEventPublisher()

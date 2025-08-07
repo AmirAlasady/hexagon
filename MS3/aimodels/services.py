@@ -69,16 +69,18 @@ class AIModelService:
         )
         return user_model
 
-    def update_user_model(self, *, model_id, user_id, name, configuration):
-        """ Updates a user's private model configuration. """
-        # Step 1: Get the model. get_model_by_id already performs the necessary view permission check.
+    def update_user_model(self, *, model_id, user_id, name, configuration, capabilities=None):
+        """
+        Updates a user's private model configuration.
+        Now also handles updates to capabilities.
+        """
+        # Step 1: Get the model (this also performs permission checks)
         model_to_update = self.get_model_by_id(model_id, user_id)
         
-        # Step 2: Add an explicit check to prevent updating system models.
         if model_to_update.is_system_model:
             raise PermissionDenied("System models cannot be modified.")
             
-        # Step 3: Proceed with validation and update logic
+        # Step 2: Validate the configuration against the blueprint (unchanged)
         blueprint = AIModel.objects.get(provider=model_to_update.provider, is_system_model=True)
         schema = blueprint.configuration
         try:
@@ -86,8 +88,16 @@ class AIModelService:
         except jsonschema.ValidationError as e:
             raise ValidationError(f"Configuration is invalid: {e.message}")
             
+        # Step 3: Update the model's fields
         model_to_update.name = name
-        model_to_update.configuration = encrypt_values(configuration, schema)
+        model_to_update.configuration = encrypt_values(configuration, schema) # Placeholder encryption
+        
+        # --- THE CHANGE IS HERE ---
+        # If the 'capabilities' argument was passed, update that field as well.
+        if capabilities is not None:
+            model_to_update.capabilities = capabilities
+        # --- END OF CHANGE ---
+            
         model_to_update.save()
         return model_to_update
 

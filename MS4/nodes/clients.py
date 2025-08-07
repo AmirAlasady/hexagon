@@ -81,9 +81,11 @@ class ModelServiceClient(BaseServiceClient):
         """
         Fetches the capabilities for a given model_id from the Model Service.
         """
+        print(f"Fetchinggggg capabilities for model ID: {model_id}")
         headers = {"Authorization": f"Bearer {jwt_token}"}
         internal_path = f"/ms3/internal/v1/models/{model_id}/capabilities/"
         response = self.client.get(internal_path, headers=headers)
+        print(f"Response status code: {response.status_code}")
         data = self._handle_response(response) # This will raise exceptions on failure
         return data.get("capabilities", [])
 

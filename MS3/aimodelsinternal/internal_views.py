@@ -17,52 +17,20 @@ class ModelValidationView(APIView):
         all the necessary permission logic.
         """
         try:
+            print(f"Validating access for model_id: {model_id} for user: {request.user.id}")
             # This method will raise PermissionDenied or ValidationError (NotFound)
             # if the user can't access the model.
             self.service.get_model_by_id(model_id=model_id, user_id=request.user.id)
-            
+            print(f"Access validated for model_id: {model_id} for user: {request.user.id}")
             # If it doesn't raise an exception, the user is authorized.
             return Response(status=status.HTTP_204_NO_CONTENT)
         
         except Exception as e:
+            print(f"Access validation failed for model_id: {model_id} for user: {request.user.id}")
             # Let DRF's exception handler format the response (403, 404, etc.)
             raise e
 
-class ModelConfigurationView(APIView):
-    """
-    Internal-only view for the Inference Orchestrator to get the full,
-    un-sanitized, and decrypted configuration for a model.
-    """
-    permission_classes = [permissions.IsAuthenticated]
-    service = AIModelService()
 
-    def get(self, request, model_id):
-        """
-        Returns the full, raw configuration required for an LLM call.
-        """
-        try:
-            model = self.service.get_model_by_id(model_id=model_id, user_id=request.user.id)
-            
-            # --- IMPORTANT ---
-            # Here we bypass the serializer's sanitization logic.
-            # We need to decrypt the configuration before sending it.
-            
-            # Let's assume the service has a method for this.
-            # decrypted_config = self.service.get_decrypted_config(model)
-            
-            # For now, we'll just return the raw config from the DB.
-            # Replace this with your actual decryption logic.
-            raw_config = model.configuration 
-            
-            response_data = {
-                "provider": model.provider,
-                "configuration": raw_config, # The un-sanitized, decrypted config
-                "capabilities": model.capabilities,
-            }
-            return Response(response_data)
-
-        except Exception as e:
-            raise e
         
 
 

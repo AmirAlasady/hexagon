@@ -22,3 +22,8 @@ class AIModelCreateSerializer(serializers.Serializer):
 class AIModelUpdateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255, required=True)
     configuration = serializers.JSONField(required=True)
+
+    capabilities = serializers.ListField(
+        child=serializers.CharField(),
+        required=False # It's optional; the user doesn't have to provide it.
+    )

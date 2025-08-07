@@ -18,11 +18,14 @@ class NodeService:
     def __init__(self):
         # Instantiate all dependencies. In a larger app, this would use dependency injection.
         self.node_repo = NodeRepository()
+
+        # Instantiate all microservice clients.
         self.project_client = ProjectServiceClient()
         self.model_client = ModelServiceClient()
         self.tool_client = ToolServiceClient()
         # self.memory_client = MemoryServiceClient()
         # self.knowledge_client = KnowledgeServiceClient()
+
 
     def _validate_resources(self, jwt_token: str, project_id: str, configuration: dict):
         """
@@ -84,6 +87,33 @@ class NodeService:
                 # occurred in the thread, causing this entire method to fail.
                 future.result()
 
+
+    def get_nodes_for_project(self, *, project_id: uuid.UUID, user_id: uuid.UUID, jwt_token: str) -> list[Node]:
+        """
+        The use case for listing all nodes in a project.
+        It first authorizes project-level access, then fetches the data.
+        """
+        # Step 1: Authorize that the user can even view this project's contents.
+        self.project_client.authorize_user(jwt_token, str(project_id))
+        
+        # Step 2: If authorized, retrieve the nodes from the local database.
+        return self.node_repo.find_by_project(project_id)
+
+
+
+    def _generate_config_template_from_capabilities(self, model_id: str, capabilities: list) -> dict:
+        """
+        Generates a valid, empty configuration template based on a model's capabilities.
+        """
+        master_config = {"model_config": {"model_id": str(model_id)}}
+        if "text" in capabilities:
+            master_config["memory_config"] = {"is_enabled": False, "bucket_id": None}
+            master_config["rag_config"] = {"is_enabled": False, "collection_id": None}
+        if "tool_use" in capabilities:
+            master_config["tool_config"] = {"tool_ids": []}
+        # Add more capability-based configurations here...
+        return master_config
+
     def create_draft_node(self, *, jwt_token: str, user_id: uuid.UUID, project_id: uuid.UUID, name: str) -> Node:
         # 1. Authorize project ownership BEFORE creating anything.
         self.project_client.authorize_user(jwt_token, str(project_id))
@@ -98,98 +128,94 @@ class NodeService:
 
     # --- NEW METHOD: STAGE 2 ---
     def configure_node_model(self, *, jwt_token: str, node: Node, model_id: uuid.UUID) -> Node:
-        # 1. Fetch model capabilities. This also validates user access to the model.
-        capabilities = self.model_client.get_model_capabilities(jwt_token, str(model_id))
+        """
+        Configures or reconfigures a node with a new model.
+        This process is "forward-looking" and resilient to the old model being deleted.
+        """
+        # 1. Fetch NEW model's capabilities. This is the only external call needed.
+        #    It also validates user access to the new model.
+        new_capabilities = self.model_client.get_model_capabilities(jwt_token, str(model_id))
+        
+        # 2. Generate the ideal, valid template for the NEW model.
+        new_template = self._generate_config_template_from_capabilities(model_id, new_capabilities)
+        
+        # 3. Get the OLD configuration from the node's own storage.
+        #    We trust this as the user's last known good configuration.
+        old_config = node.configuration
+        
+        # 4. Perform best-effort migration of user settings onto the new template.
+        final_config = new_template.copy()
+        
+        # Migrate parameters (always safe to carry over)
+        if old_config.get("model_config", {}).get("parameters"):
+            final_config["model_config"]["parameters"] = old_config["model_config"]["parameters"]
 
-        # 2. Generate the configuration template based on capabilities.
-        master_config = {"model_config": {"model_id": str(model_id)}}
-        if "text" in capabilities:
-            master_config["memory_config"] = {"is_enabled": False, "bucket_id": None}
-            master_config["rag_config"] = {"is_enabled": False, "collection_id": None}
-        if "tool_use" in capabilities:
-            master_config["tool_config"] = {"tool_ids": []}
-        # Add other capability-based configurations here...
+        # Migrate memory config IF the new template supports it
+        if "memory_config" in final_config and "memory_config" in old_config:
+            final_config["memory_config"] = old_config["memory_config"]
 
-
-        # 3. Update the node with the template and activate it.
+        # Migrate RAG config IF the new template supports it
+        if "rag_config" in final_config and "rag_config" in old_config:
+            final_config["rag_config"] = old_config["rag_config"]
+        
+        # Migrate tools IF the new template supports them
+        if "tool_config" in final_config and "tool_config" in old_config:
+            final_config["tool_config"] = old_config["tool_config"]
+        
+        # 5. Save the result. This action always "heals" the node to an ACTIVE state.
         return self.node_repo.update(
             node=node,
-            name=node.name, # Name doesn't change here
-            configuration=master_config,
+            name=node.name,
+            configuration=final_config,
             status=NodeStatus.ACTIVE
         )
 
     # --- UPDATED METHOD: FINAL UPDATE ---
     def update_node(self, *, jwt_token: str, node: Node, name: str, configuration: dict) -> Node:
-        """
-        The use case for updating an existing node. It intelligently handles
-        whether the model has changed, requiring a full template regeneration.
-        """
-        # --- THE NEW, SMARTER LOGIC STARTS HERE ---
-        
-        # 1. Extract the new model_id from the user's submitted configuration.
-        new_model_id_str = configuration.get("model_config", {}).get("model_id")
-        if not new_model_id_str:
-            raise ValidationError("The provided configuration must contain a 'model_config' with a 'model_id'.")
-            
-        # 2. Compare with the node's current model_id.
-        current_model_id_str = node.configuration.get("model_config", {}).get("model_id")
+        # --- VALIDATION GAUNTLET ---
 
-        final_configuration = {}
-        
-        if new_model_id_str != current_model_id_str:
-            # --- CASE A: The model has been changed! ---
-            # This is a major change. We must regenerate the entire config template.
-            print(f"INFO: Model changed for node {node.id}. Regenerating configuration template.")
-            
-            # a. Fetch capabilities of the NEW model. This also validates access.
-            capabilities = self.model_client.get_model_capabilities(jwt_token, new_model_id_str)
-            
-            # b. Generate the new master template.
-            master_config = {"model_config": {"model_id": new_model_id_str}}
-            if "text" in capabilities:
-                master_config["memory_config"] = {"is_enabled": False, "bucket_id": None}
-                master_config["rag_config"] = {"is_enabled": False, "collection_id": None}
-            if "tool_use" in capabilities:
-                master_config["tool_config"] = {"tool_ids": []}
-            
-            # c. Intelligently merge the user's *other* provided values into the new template.
-            #    For example, if the user also provided new tool_ids, we merge them in.
-            if "tool_config" in configuration and "tool_use" in capabilities:
-                master_config["tool_config"]["tool_ids"] = configuration.get("tool_config", {}).get("tool_ids", [])
-            if "memory_config" in configuration and "text" in capabilities:
-                 master_config["memory_config"]["is_enabled"] = configuration.get("memory_config", {}).get("is_enabled", False)
-            # Add more merge logic here for other resources...
-            
-            final_configuration = master_config
-        else:
-            # --- CASE B: The model is the same. ---
-            # This is a simple update. We trust the user is providing the full, valid structure.
-            final_configuration = configuration
+        # 1. Fetch the node's TRUSTED configuration template from the DB.
+        trusted_config = node.configuration
+        trusted_model_id = trusted_config.get("model_config", {}).get("model_id")
 
-        # 3. Perform final, comprehensive validation on the resulting configuration.
-        self._validate_resources(jwt_token, str(node.project_id), final_configuration)
+        # 2. Prevent Model Change (Problem 2)
+        submitted_model_id = configuration.get("model_config", {}).get("model_id")
+        if submitted_model_id and submitted_model_id != trusted_model_id:
+            raise ValidationError("Changing the model is not allowed through this endpoint. Please use the '/configure-model' endpoint instead.")
+
+        # 3. Validate Submitted Structure (Problem 1 - Arbitrary Injection)
+        #    Ensure the user is not submitting keys that are not in the trusted template.
+        for key in configuration:
+            if key not in trusted_config:
+                raise ValidationError(f"Configuration key '{key}' is not supported by the current model.")
+
+        # 4. Deep Merge and Final Validation
+        #    Start with a copy of the trusted config and update it with user values.
+        final_config = trusted_config.copy()
+        
+        # Update parameters
+        if "parameters" in configuration.get("model_config", {}):
+            final_config["model_config"]["parameters"] = configuration["model_config"]["parameters"]
+        
+        # Update memory, RAG, tools, etc.
+        if "memory_config" in final_config and "memory_config" in configuration:
+            final_config["memory_config"] = configuration["memory_config"]
+        if "rag_config" in final_config and "rag_config" in configuration:
+            final_config["rag_config"] = configuration["rag_config"]
+        if "tool_config" in final_config and "tool_config" in configuration:
+            final_config["tool_config"] = configuration["tool_config"]
+        
+        # 5. Perform final cross-service validation on the merged data
+        #    This checks if the provided tool_ids, bucket_ids, etc. are valid.
+        self._validate_resources(jwt_token, str(node.project_id), final_config)
             
-        # 4. If all validations pass, save the changes to the database.
-        #    This action always resets the status to ACTIVE.
+        # 6. If all validations pass, save the changes.
         return self.node_repo.update(
             node=node,
             name=name,
-            configuration=final_configuration,
+            configuration=final_config,
             status=NodeStatus.ACTIVE
         )
-
-
-    def get_nodes_for_project(self, project_id: uuid.UUID, user_id: int, jwt_token: str) -> list[Node]:
-        """
-        The use case for listing all nodes in a project.
-        It first authorizes project-level access, then fetches the data.
-        """
-        # Step 1: Authorize that the user can even view this project's contents.
-        self.project_client.authorize_user(jwt_token, str(project_id))
-        
-        # Step 2: If authorized, retrieve the nodes from the local database.
-        return self.node_repo.find_by_project(project_id)
         
     def delete_node(self, node: Node):
         """

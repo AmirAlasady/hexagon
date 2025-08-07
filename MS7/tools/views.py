@@ -11,7 +11,7 @@ from .models import Tool
 from .serializers import ToolSerializer, ToolCreateSerializer, ToolUpdateSerializer
 from .permissions import IsOwner
 from .services import ToolService # <-- Import the service
-
+from messaging.event_publisher import tool_event_publisher  # Import the event publisher
 class ToolListCreateAPIView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
     
@@ -64,31 +64,16 @@ class ToolDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
         return tool
 
     def destroy(self, request, *args, **kwargs):
-        auth_header = request.headers.get('Authorization')
-        if not auth_header:
-            return Response({"error": "Authorization header missing."}, status=status.HTTP_401_UNAUTHORIZED)
-
-        # STEP 1: GET THE OBJECT AND CHECK PERMISSIONS
-        # This will raise a 404 if not found, or a 403 if the user is not the owner.
-        # It also implicitly checks if it's a system tool, as the IsOwner permission will fail.
         instance = self.get_object()
+        tool_id_to_cleanup = str(instance.pk)
         
-        # STEP 2: PERFORM THE DELETION
-        # This is now safe to do because all checks have passed.
+        # Perform deletion first
         self.perform_destroy(instance)
         
-        # STEP 3: IF DELETION SUCCEEDED, CALL THE CLEANUP HOOK
+        # Publish event
         try:
-            with httpx.Client(timeout=10.0) as client:
-                hook_url = f"{settings.NODE_SERVICE_URL}/ms4/api/v1/hooks/resource-deleted/"
-                payload = {"resource_type": "tool", "resource_id": str(instance.pk)}
-                headers = {"Authorization": auth_header}
-                
-                response = client.post(hook_url, json=payload, headers=headers)
-                response.raise_for_status()
-        except (httpx.RequestError, httpx.HTTPStatusError) as e:
-            # Log this as a critical error for monitoring.
-            print(f"CRITICAL ALERT: Tool {instance.pk} was deleted, but the Node Service cleanup hook failed: {e}")
+            tool_event_publisher.publish_tool_deleted(tool_id=tool_id_to_cleanup)
+        except Exception as e:
+            print(f"CRITICAL ALERT: Tool {tool_id_to_cleanup} was deleted, but event publishing failed: {e}")
 
-        # STEP 4: RETURN SUCCESS
         return Response(status=status.HTTP_204_NO_CONTENT)

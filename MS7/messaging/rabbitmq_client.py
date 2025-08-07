@@ -1,47 +1,68 @@
+# messaging/rabbitmq_client.py (Definitive Thread-Safe and Channel-Safe Version)
+
 import pika
 import json
+import threading
 from django.conf import settings
 
 class RabbitMQClient:
-    _instance = None
+    """
+    A robust, thread-safe RabbitMQ client that manages connections on a per-thread
+    basis and uses a fresh channel for each publishing operation. This is the
+    recommended pattern for use in multi-threaded applications like Django.
+    """
+    _thread_local = threading.local()
 
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(RabbitMQClient, cls).__new__(cls)
-            cls._instance._connection = None
-            cls._instance._channel = None
-        return cls._instance
-
-    def _connect(self):
-        """Establishes connection and channel if they don't exist."""
-        if not self._connection or self._connection.is_closed:
-            params = pika.URLParameters('amqp://guest:guest@localhost:5672/')
-            self._connection = pika.BlockingConnection(params)
-            self._channel = self._connection.channel()
-            # This service needs to publish to the user_events exchange
-            self._channel.exchange_declare(exchange='user_events', exchange_type='topic', durable=True)
-
-    def get_channel(self):
-        """Returns the channel, ensuring connection is active."""
-        self._connect()
-        return self._channel
+    def _get_connection(self):
+        """
+        Gets or creates a dedicated connection for the current thread.
+        This method is the core of the thread-safety mechanism.
+        """
+        # Check if this thread already has a connection, and if it's open.
+        if not hasattr(self._thread_local, 'connection') or self._thread_local.connection.is_closed:
+            print(f"Thread {threading.get_ident()}: No active RabbitMQ connection. Creating new one...")
+            try:
+                params = pika.URLParameters(settings.RABBITMQ_URL)
+                self._thread_local.connection = pika.BlockingConnection(params)
+                print(f"Thread {threading.get_ident()}: Connection successful.")
+            except pika.exceptions.AMQPConnectionError as e:
+                print(f"CRITICAL: Thread {threading.get_ident()} failed to connect to RabbitMQ: {e}")
+                raise  # Re-raise the exception to signal a failure.
+        return self._thread_local.connection
 
     def publish(self, exchange_name, routing_key, body):
-        """Publishes a message to a given exchange with a routing key."""
-        channel = self.get_channel()
-        message_body = json.dumps(body)
-        
-        channel.basic_publish(
-            exchange=exchange_name,
-            routing_key=routing_key,
-            body=message_body,
-            properties=pika.BasicProperties(content_type='application/json', delivery_mode=2)
-        )
-        print(f" [x] Sent '{routing_key}':'{message_body}'")
+        """
+        Publishes a message using a short-lived, dedicated channel.
+        This is the safest way to publish from multiple threads.
+        """
+        try:
+            connection = self._get_connection()
+            # --- THE CRITICAL FIX IS HERE ---
+            # Use a 'with' statement to ensure the channel is always closed,
+            # even if errors occur. A new channel is created for every publish.
+            with connection.channel() as channel:
+                # Ensure the exchange exists. This is idempotent and cheap to call.
+                channel.exchange_declare(exchange=exchange_name, exchange_type='topic', durable=True)
+    
+                message_body = json.dumps(body, default=str)
+                
+                channel.basic_publish(
+                    exchange=exchange_name,
+                    routing_key=routing_key,
+                    body=message_body,
+                    properties=pika.BasicProperties(
+                        content_type='application/json',
+                        delivery_mode=pika.DeliveryMode.Persistent, # Make message durable
+                    )
+                )
+                print(f" [x] Sent '{routing_key}':'{message_body}'")
+        except (pika.exceptions.AMQPError, OSError) as e:
+            # Catch a broader range of potential connection/channel errors.
+            print(f"Error publishing message: {e}. The connection will be re-established on the next call.")
+            # Invalidate the connection so it's forcefully recreated next time.
+            if hasattr(self._thread_local, 'connection'):
+                self._thread_local.connection.close()
+            raise # Re-raise so the calling view knows the publish failed.
 
-    def close(self):
-        if self._connection and self._connection.is_open:
-            self._connection.close()
-        self._instance = None
-
+# Create a single, globally accessible instance.
 rabbitmq_client = RabbitMQClient()
