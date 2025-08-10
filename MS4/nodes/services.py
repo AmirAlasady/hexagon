@@ -6,7 +6,7 @@ import concurrent.futures
 import uuid
 
 # These imports must correctly point to your client, repository, and model files.
-from .clients import ProjectServiceClient, ModelServiceClient, ToolServiceClient #, MemoryServiceClient, KnowledgeServiceClient
+from nodes_internals.clients import ProjectServiceClient, ModelServiceClient, ToolServiceClient #, MemoryServiceClient, KnowledgeServiceClient
 from .repository import NodeRepository
 from .models import Node, NodeStatus
 

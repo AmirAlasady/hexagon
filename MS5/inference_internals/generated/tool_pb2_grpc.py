@@ -34,15 +34,15 @@ class ToolServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.ValidateTools = channel.unary_unary(
-                '/tool.ToolService/ValidateTools',
-                request_serializer=tool__pb2.ValidateToolsRequest.SerializeToString,
-                response_deserializer=tool__pb2.ValidateToolsResponse.FromString,
-                _registered_method=True)
         self.GetToolDefinitions = channel.unary_unary(
                 '/tool.ToolService/GetToolDefinitions',
                 request_serializer=tool__pb2.GetToolDefinitionsRequest.SerializeToString,
                 response_deserializer=tool__pb2.GetToolDefinitionsResponse.FromString,
+                _registered_method=True)
+        self.ValidateTools = channel.unary_unary(
+                '/tool.ToolService/ValidateTools',
+                request_serializer=tool__pb2.ValidateToolsRequest.SerializeToString,
+                response_deserializer=tool__pb2.ValidateToolsResponse.FromString,
                 _registered_method=True)
         self.ExecuteMultipleTools = channel.unary_unary(
                 '/tool.ToolService/ExecuteMultipleTools',
@@ -54,14 +54,6 @@ class ToolServiceStub(object):
 class ToolServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
-    def ValidateTools(self, request, context):
-        """For Node Service: Validates if a user can access a list of tools.
-        Note: This is also implemented as an HTTP endpoint for services that prefer REST.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
     def GetToolDefinitions(self, request, context):
         """For Inference P1: Fetches the full definitions for a list of tools.
         """
@@ -69,9 +61,16 @@ class ToolServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def ExecuteMultipleTools(self, request, context):
-        """For Inference P2: Executes one or more tool calls in parallel.
+    def ValidateTools(self, request, context):
+        """These other RPCs are for different services, but it's good practice
+        for the proto to contain the full service definition.
         """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ExecuteMultipleTools(self, request, context):
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -79,15 +78,15 @@ class ToolServiceServicer(object):
 
 def add_ToolServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'ValidateTools': grpc.unary_unary_rpc_method_handler(
-                    servicer.ValidateTools,
-                    request_deserializer=tool__pb2.ValidateToolsRequest.FromString,
-                    response_serializer=tool__pb2.ValidateToolsResponse.SerializeToString,
-            ),
             'GetToolDefinitions': grpc.unary_unary_rpc_method_handler(
                     servicer.GetToolDefinitions,
                     request_deserializer=tool__pb2.GetToolDefinitionsRequest.FromString,
                     response_serializer=tool__pb2.GetToolDefinitionsResponse.SerializeToString,
+            ),
+            'ValidateTools': grpc.unary_unary_rpc_method_handler(
+                    servicer.ValidateTools,
+                    request_deserializer=tool__pb2.ValidateToolsRequest.FromString,
+                    response_serializer=tool__pb2.ValidateToolsResponse.SerializeToString,
             ),
             'ExecuteMultipleTools': grpc.unary_unary_rpc_method_handler(
                     servicer.ExecuteMultipleTools,
@@ -106,33 +105,6 @@ class ToolService(object):
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def ValidateTools(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/tool.ToolService/ValidateTools',
-            tool__pb2.ValidateToolsRequest.SerializeToString,
-            tool__pb2.ValidateToolsResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
     def GetToolDefinitions(request,
             target,
             options=(),
@@ -149,6 +121,33 @@ class ToolService(object):
             '/tool.ToolService/GetToolDefinitions',
             tool__pb2.GetToolDefinitionsRequest.SerializeToString,
             tool__pb2.GetToolDefinitionsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ValidateTools(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/tool.ToolService/ValidateTools',
+            tool__pb2.ValidateToolsRequest.SerializeToString,
+            tool__pb2.ValidateToolsResponse.FromString,
             options,
             channel_credentials,
             insecure,

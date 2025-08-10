@@ -24,8 +24,5 @@ urlpatterns = [
     # Manage a single, fully configured node (GET details, PUT updates, DELETE)
     path('nodes/<uuid:pk>/', NodeDetailAPIView.as_view(), name='node-detail'),
 
-    # --- INTERNAL WEBHOOK ---
-    # Note: For security, this endpoint is placed under 'api/v1' for now, but in production,
-    # you might move all internal routes to a separate URL prefix like '/ms4/internal/v1/'.
-    #path('hooks/resource-deleted/', ResourceDeletionHookAPIView.as_view(), name='hook-resource-deleted'),
+
 ]

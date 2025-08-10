@@ -1,4 +1,4 @@
-// MS5/inference_internals/protos/node.proto
+// MS4/nodes_internals/protos/node.proto
 syntax = "proto3";
 
 import "google/protobuf/struct.proto";
@@ -21,5 +21,5 @@ message GetNodeDetailsResponse {
   string owner_id = 3;
   string name = 4;
   google.protobuf.Struct configuration = 5; // The node's JSON configuration.
-  string status = 6; // The current status ('draft', 'active', 'altered', 'inactive')
+  string status = 6; // The current status ('draft', 'active', etc.)
 }

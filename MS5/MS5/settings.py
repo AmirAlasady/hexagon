@@ -185,3 +185,4 @@ RABBITMQ_URL = os.getenv('RABBITMQ_URL', 'amqp://guest:guest@localhost:5672/')
 # gRPC Client URLs for inter-service communication
 NODE_SERVICE_GRPC_URL = os.getenv('NODE_SERVICE_GRPC_URL')
 MODEL_SERVICE_GRPC_URL = os.getenv('MODEL_SERVICE_GRPC_URL')
+TOOL_SERVICE_GRPC_URL = os.getenv('TOOL_SERVICE_GRPC_URL')

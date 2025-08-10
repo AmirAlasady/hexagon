@@ -78,7 +78,7 @@ class Command(BaseCommand):
     def handle_tool_deletion(self, tool_id):
         if not tool_id: return
         candidate_nodes = Node.objects.select_for_update().filter(
-            status__in=[NodeStatus.ACTIVE, NodeStatus.ALTERED],
+            status__in=[NodeStatus.ACTIVE, NodeStatus.ALTERED, NodeStatus.INACTIVE],
             configuration__has_key='tool_config',
             configuration__tool_config__has_key='tool_ids'
         )

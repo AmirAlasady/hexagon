@@ -7,6 +7,7 @@ from google.protobuf.json_format import MessageToDict
 from .generated import node_pb2, node_pb2_grpc
 from .generated import model_pb2, model_pb2_grpc
 from .generated import tool_pb2, tool_pb2_grpc # <-- NEW IMPORT
+
 class NodeServiceClient:
     # ... (The rest of this file remains exactly the same)
     def get_node_details(self, node_id: str, user_id: str) -> dict:
