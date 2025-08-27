@@ -1,0 +1,14 @@
+aio-pika
+grpcio
+grpcio-tools
+protobuf
+google-api-python-client
+python-dotenv
+httpx
+pydantic
+langchain
+langchain-core
+langchain-openai
+langchain-anthropic
+langchain-google-genai
+langchain-community
