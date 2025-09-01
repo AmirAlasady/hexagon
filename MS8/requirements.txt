@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]  # High-performance ASGI server
+websockets
+aio-pika           # Async RabbitMQ library
+python-dotenv
+httpx              # For calling the validation endpoint on MS5
+redis

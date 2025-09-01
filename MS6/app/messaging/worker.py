@@ -1,109 +1,95 @@
-import pika
+import asyncio
 import json
-import time
-import threading
+import aio_pika
 from app import config
 from app.logging_config import logger
 from app.execution.job import Job
+from app.execution.build_context import BuildContext
 from app.execution.pipeline import ChainConstructionPipeline
 from app.execution.executor import Executor
 from app.messaging.publisher import ResultPublisher
-from app.execution.build_context import BuildContext
 
 class RabbitMQWorker:
     """
-    Manages a robust, blocking connection to RabbitMQ to consume inference jobs.
-    This runs in its own thread.
+    Manages the asyncio connection and consumption loop for inference jobs.
+    This version is designed for high-throughput, concurrent job processing.
     """
-    def __init__(self):
+    def __init__(self, prefetch_count: int = 10):
+        """
+        Initializes the worker.
+        Args:
+            prefetch_count: The maximum number of jobs this worker can
+                            process concurrently.
+        """
         self.connection = None
-        self.channel = None
         self.result_publisher = None
+        self.prefetch_count = prefetch_count
 
-    def _connect(self):
-        """Establishes a connection to RabbitMQ."""
-        logger.info("Attempting to connect to RabbitMQ...")
-        params = pika.URLParameters(config.RABBITMQ_URL)
-        self.connection = pika.BlockingConnection(params)
-        self.channel = self.connection.channel()
-        
-        # Initialize the thread-safe publisher for sending results
-        self.result_publisher = ResultPublisher()
-
-        exchange_name = 'inference_exchange'
-        self.channel.exchange_declare(exchange=exchange_name, exchange_type='topic', durable=True)
-        
-        queue_name = 'inference_jobs_queue'
-        self.channel.queue_declare(queue=queue_name, durable=True)
-        self.channel.queue_bind(exchange=exchange_name, queue=queue_name, routing_key='inference.job.start')
-        
-        self.channel.basic_qos(prefetch_count=1)
-        self.channel.basic_consume(queue=queue_name, on_message_callback=self._on_message)
-        
-        logger.info("Successfully connected to RabbitMQ and set up consumer.")
-
-    def _on_message(self, channel, method_frame, header_properties, body):
-        """Callback executed for each message received."""
+    async def process_message(self, message: aio_pika.IncomingMessage):
+        """
+        The core logic for processing a single message from the queue.
+        This function is designed to be called as a concurrent task.
+        """
         job_id = "unknown"
         try:
-            payload = json.loads(body.decode())
-            job = Job(payload)
-            job_id = job.id
-            logger.info(f"[{job_id}] Received new job. Starting processing in a new thread.")
-            
-            # --- EXECUTE JOB IN A SEPARATE THREAD ---
-            # This prevents a long-running AI job from blocking the RabbitMQ connection heartbeat.
-            processing_thread = threading.Thread(
-                target=self.process_job,
-                args=(job,)
-            )
-            processing_thread.start()
-            
+            # The 'with' statement ensures the message is acknowledged (ack'd)
+            # upon successful completion, or rejected (nack'd) if an unhandled
+            # exception occurs, putting it back in the queue for another worker.
+            # Change requeue to False to send to a Dead Letter Queue instead.
+            async with message.process(requeue=True):
+                payload = json.loads(message.body.decode())
+                
+                job = Job(payload)
+                job_id = job.id
+                logger.info(f"[{job_id}] Processing new job...")
+
+                build_context = BuildContext(job)
+                pipeline = ChainConstructionPipeline(build_context)
+                final_context = await pipeline.run()
+
+                executor = Executor(final_context, self.result_publisher)
+                await executor.run()
+                
+                logger.info(f"[{job_id}] Successfully finished processing job.")
+
         except json.JSONDecodeError:
-            logger.error(f"Message body is not valid JSON: {body.decode()[:200]}...")
-            self.result_publisher.publish_error_result(job_id, "Invalid job format received.")
-        except Exception:
-            logger.error(f"[{job_id}] A critical error occurred before job processing could start.", exc_info=True)
-            self.result_publisher.publish_error_result(job_id, "An unexpected internal worker error occurred.")
-        
-        # Acknowledge the message now that the job has been handed off
-        channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+            logger.error(f"Message body is not valid JSON. Discarding message: {message.body.decode()[:200]}...")
+            # We explicitly reject here so it doesn't get requeued.
+            await message.reject(requeue=False)
+        except Exception as e:
+            logger.error(f"[{job_id}] Critical error processing message. Publishing error result.", exc_info=True)
+            if self.result_publisher:
+                await self.result_publisher.publish_error_result(job_id, f"An unexpected internal executor error occurred: {type(e).__name__}")
+            # The message will be requeued due to the 'with' statement's default behavior
 
-    def process_job(self, job: Job):
-        """
-        The target function for the processing thread. This is where the real work happens.
-        """
-        try:
-            # The Executor now needs to be run with asyncio
-            import asyncio
-            asyncio.run(self._run_async_executor(job))
-        except Exception:
-            logger.error(f"[{job.id}] Unhandled exception in async job processor.", exc_info=True)
-            self.result_publisher.publish_error_result(job.id, "A fatal error occurred during async execution.")
-    
-    async def _run_async_executor(self, job: Job):
-        """Helper to run the async executor logic from a sync thread."""
-        logger.info(f"[{job.id}] Async execution started.")
-        build_context = BuildContext(job)
-        pipeline = ChainConstructionPipeline(build_context)
-        final_context = await pipeline.run()
-        executor = Executor(final_context, self.result_publisher)
-        await executor.run()
-        logger.info(f"[{job.id}] Async execution finished.")
-
-
-    def run(self):
-        """Starts the worker and enters a reconnect loop."""
+    async def run(self):
+        """Starts the worker and listens for messages indefinitely."""
         while True:
             try:
-                self._connect()
-                logger.info(" [*] Inference Executor Worker is waiting for jobs. To exit press CTRL+C")
-                self.channel.start_consuming()
-            except KeyboardInterrupt:
-                logger.info("Worker shutting down gracefully.")
-                if self.connection and self.connection.is_open:
-                    self.connection.close()
-                break
-            except pika.exceptions.AMQPConnectionError as e:
-                logger.error(f"RabbitMQ connection lost: {e}. Reconnecting in 5 seconds...")
-                time.sleep(5)
+                self.connection = await aio_pika.connect_robust(config.RABBITMQ_URL, loop=asyncio.get_event_loop())
+                async with self.connection:
+                    self.result_publisher = ResultPublisher(self.connection)
+                    channel = await self.connection.channel()
+                    
+                    # Set the Quality of Service: how many messages to pre-fetch.
+                    # This is the knob for intra-worker concurrency.
+                    await channel.set_qos(prefetch_count=self.prefetch_count)
+                    logger.info(f"Worker QoS set to {self.prefetch_count}. Ready to process jobs concurrently.")
+                    
+                    exchange = await channel.declare_exchange('inference_exchange', aio_pika.ExchangeType.TOPIC, durable=True)
+                    queue = await channel.declare_queue('inference_jobs_queue', durable=True)
+                    await queue.bind(exchange, 'inference.job.start')
+                    
+                    logger.info(" [*] Inference Executor Worker is ready and waiting for jobs.")
+                    
+                    # Use an iterator and create background tasks for true concurrency
+                    async with queue.iterator() as queue_iter:
+                        async for message in queue_iter:
+                            # Schedule the processing of the message as a background task.
+                            # The loop does not wait for it to finish and can immediately
+                            # fetch the next message up to the prefetch_count limit.
+                            asyncio.create_task(self.process_message(message))
+
+            except aio_pika.exceptions.AMQPConnectionError as e:
+                logger.error(f"RabbitMQ connection lost: {e}. Retrying in 5 seconds...")
+                await asyncio.sleep(5)

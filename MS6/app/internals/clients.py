@@ -4,7 +4,7 @@ import httpx
 import asyncio
 import json
 from app import config
-from app.internals.generated import tool_pb2, tool_pb2_grpc
+#from app.internals.generated import tool_pb2, tool_pb2_grpc
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.struct_pb2 import Struct
 from app.logging_config import logging
@@ -20,7 +20,7 @@ class ToolServiceClient:
         """
         try:
             async with grpc.aio.insecure_channel(config.TOOL_SERVICE_GRPC_URL) as channel:
-                stub = tool_pb2_grpc.ToolServiceStub(channel)
+                #stub = tool_pb2_grpc.ToolServiceStub(channel)
                 
                 proto_tool_calls = []
                 for call in tool_calls:
@@ -37,23 +37,23 @@ class ToolServiceClient:
                     if isinstance(args_data, dict):
                         arguments.update(args_data)
 
-                    proto_tool_calls.append(tool_pb2.ToolCall(
-                        id=call.get("id"),
-                        name=call.get("name"),
-                        arguments=arguments
-                    ))
+                    #proto_tool_calls.append(tool_pb2.ToolCall(
+                    #    id=call.get("id"),
+                    #    name=call.get("name"),
+                    #    arguments=arguments
+                    #))
 
-                request = tool_pb2.ExecuteMultipleToolsRequest(tool_calls=proto_tool_calls)
-                response = await stub.ExecuteMultipleTools(request, timeout=30.0)
+                #request = tool_pb2.ExecuteMultipleToolsRequest(tool_calls=proto_tool_calls)
+                #response = await stub.ExecuteMultipleTools(request, timeout=30.0)
                 
                 return [
-                    {
-                        "tool_call_id": res.tool_call_id,
-                        "name": res.name,
-                        "status": res.status,
-                        "output": res.output
-                    }
-                    for res in response.results
+                    #{
+                    #    "tool_call_id": res.tool_call_id,
+                    #    "name": res.name,
+                    #    "status": res.status,
+                    #    "output": res.output
+                    #}
+                    #for res in response.results
                 ]
         except grpc.aio.AioRpcError as e:
             logger.error(f"gRPC error executing tools: {e.details()}")

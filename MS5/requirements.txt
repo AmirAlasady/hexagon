@@ -10,3 +10,4 @@ grpcio-tools
 protobuf
 google-api-python-client
 dotenv
+redis

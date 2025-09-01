@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv(BASE_DIR / '.env')
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
-
+MEMORY_SERVICE_GRPC_URL = os.getenv('MEMORY_SERVICE_GRPC_URL')
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
 if not SECRET_KEY:
     # This fallback should ideally not be hit if .env is loaded correctly
@@ -19,7 +19,10 @@ if not SECRET_KEY:
     print("WARNING: DJANGO_SECRET_KEY not found in environment or .env. Using fallback. THIS IS INSECURE FOR PRODUCTION.")
 
 DEBUG = os.getenv('DJANGO_DEBUG', 'True').lower() in ('true', '1', 't')
+import redis
 
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+REDIS_CLIENT = redis.from_url(REDIS_URL)
 ALLOWED_HOSTS = ['*']
 
 
@@ -186,3 +189,53 @@ RABBITMQ_URL = os.getenv('RABBITMQ_URL', 'amqp://guest:guest@localhost:5672/')
 NODE_SERVICE_GRPC_URL = os.getenv('NODE_SERVICE_GRPC_URL')
 MODEL_SERVICE_GRPC_URL = os.getenv('MODEL_SERVICE_GRPC_URL')
 TOOL_SERVICE_GRPC_URL = os.getenv('TOOL_SERVICE_GRPC_URL')
+
+
+
+
+# MS5/MS5/settings.py
+
+# ... (all your existing settings like DATABASES, SIMPLE_JWT, etc.)
+
+# --- ADD THIS ENTIRE LOGGING CONFIGURATION BLOCK ---
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "%(asctime)s - MS5-Orchestrator - [%(levelname)s] - %(name)s - %(message)s"
+        },
+        "simple": {
+            "format": "%(levelname)s %(message)s"
+        },
+    },
+    "handlers": {
+        "console": {
+            "level": "INFO", # Set to DEBUG for more verbose output
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    "loggers": {
+        # This configures the root logger.
+        # All of your app's loggers will inherit from this.
+        "": {
+            "handlers": ["console"],
+            "level": "INFO",
+        },
+        # You can optionally silence noisy libraries here
+        "django.server": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+    },
+}
+
+# --- END OF LOGGING CONFIGURATION BLOCK ---

@@ -1,64 +1,100 @@
-# inference_internals/clients.py (Updated Version)
+# MS5/inference_internals/clients.py
+
 import grpc
 from django.conf import settings
 from google.protobuf.json_format import MessageToDict
+from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
 
-# --- THE FIX IS HERE: Import from the 'generated' sub-package ---
+# Import all generated gRPC stubs from the 'generated' sub-package
 from .generated import node_pb2, node_pb2_grpc
 from .generated import model_pb2, model_pb2_grpc
-from .generated import tool_pb2, tool_pb2_grpc # <-- NEW IMPORT
+from .generated import tool_pb2, tool_pb2_grpc
+from .generated import memory_pb2, memory_pb2_grpc
 
 class NodeServiceClient:
-    # ... (The rest of this file remains exactly the same)
+    """A gRPC client for interacting with the Node Service (MS4)."""
     def get_node_details(self, node_id: str, user_id: str) -> dict:
-        with grpc.insecure_channel(settings.NODE_SERVICE_GRPC_URL) as channel:
-            stub = node_pb2_grpc.NodeServiceStub(channel)
-            request = node_pb2.GetNodeDetailsRequest(node_id=node_id, user_id=user_id)
-            try:
+        try:
+            with grpc.insecure_channel(settings.NODE_SERVICE_GRPC_URL) as channel:
+                stub = node_pb2_grpc.NodeServiceStub(channel)
+                request = node_pb2.GetNodeDetailsRequest(node_id=node_id, user_id=user_id)
                 response = stub.GetNodeDetails(request, timeout=10)
-                return MessageToDict(response)
-            except grpc.RpcError as e:
-                # ... (error handling code is unchanged)
-                if e.code() == grpc.StatusCode.NOT_FOUND:
-                    raise FileNotFoundError(f"Node {node_id} not found.")
-                if e.code() == grpc.StatusCode.PERMISSION_DENIED:
-                    raise PermissionError(f"Permission denied for node {node_id}.")
-                raise
+                
+                # Use preserving_proto_field_name=True to ensure snake_case keys
+                return MessageToDict(response, preserving_proto_field_name=True)
+
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.NOT_FOUND:
+                raise NotFound(f"Node '{node_id}' not found.")
+            if e.code() == grpc.StatusCode.PERMISSION_DENIED:
+                raise PermissionDenied(f"Permission denied for node '{node_id}'.")
+            raise RuntimeError(f"gRPC error from Node Service: {e.details()}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error in NodeServiceClient: {e}")
 
 class ModelServiceClient:
-    # ... (The rest of this class remains exactly the same)
+    """A gRPC client for interacting with the Model Service (MS3)."""
     def get_model_configuration(self, model_id: str, user_id: str) -> dict:
-        with grpc.insecure_channel(settings.MODEL_SERVICE_GRPC_URL) as channel:
-            stub = model_pb2_grpc.ModelServiceStub(channel)
-            request = model_pb2.GetModelConfigurationRequest(model_id=model_id, user_id=user_id)
-            try:
+        try:
+            with grpc.insecure_channel(settings.MODEL_SERVICE_GRPC_URL) as channel:
+                stub = model_pb2_grpc.ModelServiceStub(channel)
+                request = model_pb2.GetModelConfigurationRequest(model_id=model_id, user_id=user_id)
                 response = stub.GetModelConfiguration(request, timeout=10)
-                return MessageToDict(response)
-            except grpc.RpcError as e:
-                # ... (error handling code is unchanged)
-                if e.code() == grpc.StatusCode.NOT_FOUND:
-                    raise FileNotFoundError(f"Model {model_id} not found.")
-                if e.code() == grpc.StatusCode.PERMISSION_DENIED:
-                    raise PermissionError(f"Permission denied for model {model_id}.")
-                raise
+                
+                # Use preserving_proto_field_name=True to ensure snake_case keys
+                return MessageToDict(response, preserving_proto_field_name=True)
+                
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.NOT_FOUND:
+                raise NotFound(f"Model '{model_id}' not found.")
+            if e.code() == grpc.StatusCode.PERMISSION_DENIED:
+                raise PermissionDenied(f"Permission denied for model '{model_id}'.")
+            raise RuntimeError(f"gRPC error from Model Service: {e.details()}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error in ModelServiceClient: {e}")
 
-
-
-# --- NEW CLIENT CLASS ---
 class ToolServiceClient:
+    """A gRPC client for interacting with the Tool Service (MS7)."""
     def get_tool_definitions(self, tool_ids: list[str], user_id: str) -> list[dict]:
-        """
-        Calls the Tool Service via gRPC to fetch the full definitions for a list of tools.
-        """
-        with grpc.insecure_channel(settings.TOOL_SERVICE_GRPC_URL) as channel:
-            stub = tool_pb2_grpc.ToolServiceStub(channel)
-            request = tool_pb2.GetToolDefinitionsRequest(user_id=user_id, tool_ids=tool_ids)
-            try:
+        try:
+            with grpc.insecure_channel(settings.TOOL_SERVICE_GRPC_URL) as channel:
+                stub = tool_pb2_grpc.ToolServiceStub(channel)
+                request = tool_pb2.GetToolDefinitionsRequest(user_id=user_id, tool_ids=tool_ids)
                 response = stub.GetToolDefinitions(request, timeout=10)
-                # Convert list of protobuf Structs to list of Python dicts
-                return [MessageToDict(definition) for definition in response.definitions]
-            except grpc.RpcError as e:
-                print(f"gRPC Error calling Tool Service: {e.details()}")
-                if e.code() == grpc.StatusCode.NOT_FOUND:
-                    raise FileNotFoundError("One or more requested tools were not found.")
-                raise
+                
+                # Use preserving_proto_field_name=True for each item in the list
+                return [MessageToDict(d, preserving_proto_field_name=True) for d in response.definitions]
+                
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.NOT_FOUND:
+                raise NotFound("One or more requested tools were not found.")
+            raise RuntimeError(f"gRPC error from Tool Service: {e.details()}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error in ToolServiceClient: {e}")
+
+class MemoryServiceClient:
+    """A gRPC client for interacting with the Memory Service (MS9)."""
+    def get_history(self, bucket_id: str, user_id: str) -> dict:
+        if not settings.MEMORY_SERVICE_GRPC_URL:
+            print("WARNING: MEMORY_SERVICE_GRPC_URL not set in .env. Skipping memory call.")
+            return {} # Return empty dict to avoid crashes if the service isn't configured
+
+        try:
+            with grpc.insecure_channel(settings.MEMORY_SERVICE_GRPC_URL) as channel:
+                stub = memory_pb2_grpc.MemoryServiceStub(channel)
+                request = memory_pb2.GetHistoryRequest(bucket_id=bucket_id, user_id=user_id)
+                
+                print(f"DEBUG [MS5]: Calling GetHistory for bucket: {bucket_id}")
+                response = stub.GetHistory(request, timeout=10)
+                
+                # Use preserving_proto_field_name=True to ensure snake_case keys
+                return MessageToDict(response, preserving_proto_field_name=True)
+
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.NOT_FOUND:
+                raise NotFound(f"Memory bucket '{bucket_id}' not found.")
+            if e.code() == grpc.StatusCode.PERMISSION_DENIED:
+                raise PermissionDenied(f"Permission denied for memory bucket '{bucket_id}'.")
+            raise RuntimeError(f"A gRPC error occurred while contacting the Memory Service: {e.details()}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error in MemoryServiceClient: {e}")

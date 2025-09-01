@@ -6,7 +6,7 @@ import concurrent.futures
 import uuid
 
 # These imports must correctly point to your client, repository, and model files.
-from nodes_internals.clients import ProjectServiceClient, ModelServiceClient, ToolServiceClient #, MemoryServiceClient, KnowledgeServiceClient
+from nodes_internals.clients import ProjectServiceClient, ModelServiceClient, ToolServiceClient, MemoryServiceClient #KnowledgeServiceClient
 from .repository import NodeRepository
 from .models import Node, NodeStatus
 
@@ -23,7 +23,7 @@ class NodeService:
         self.project_client = ProjectServiceClient()
         self.model_client = ModelServiceClient()
         self.tool_client = ToolServiceClient()
-        # self.memory_client = MemoryServiceClient()
+        self.memory_client = MemoryServiceClient()
         # self.knowledge_client = KnowledgeServiceClient()
 
 
@@ -64,15 +64,17 @@ class NodeService:
                     )
                 )
 
-            # Task 3 & 4 (Future): Validate Memory and Knowledge resources.
-            # These are commented out but show how to extend the pattern.
-            # memory_config = configuration.get("memory_config", {})
-            # if memory_config.get("is_enabled", False):
-            #     bucket_id = memory_config.get("bucket_id")
-            #     if not bucket_id:
-            #         raise ValidationError("Memory is enabled, but no 'bucket_id' was provided.")
-            #     futures.append(executor.submit(self.memory_client.validate_bucket, jwt_token, project_id, bucket_id))
-            
+            memory_config = configuration.get("memory_config", {})
+            if memory_config.get("is_enabled") and memory_config.get("bucket_id"):
+                bucket_id = memory_config["bucket_id"]
+                futures.append(
+                    executor.submit(
+                        self.memory_client.validate_buckets,
+                        jwt_token,
+                        [bucket_id] # The validation endpoint expects a list
+                    )
+                )
+                
             # knowledge_config = configuration.get("knowledge_config", {})
             # if knowledge_config.get("is_enabled", False):
             #     collection_id = knowledge_config.get("collection_id")

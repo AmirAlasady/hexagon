@@ -24,11 +24,14 @@ class Command(BaseCommand):
                 queue_name = 'node_dependency_update_queue'
                 channel.queue_declare(queue=queue_name, durable=True)
                 
+                # --- THE FIX IS HERE: Add the new binding key ---
                 bindings = [
                     'model.deleted',
                     'tool.deleted',
-                    'model.capabilities.updated'
+                    'model.capabilities.updated',
+                    'memory.bucket.deleted' # <-- ADD THIS LINE
                 ]
+                # --- END OF FIX ---
                 
                 for binding_key in bindings:
                     self.stdout.write(f"Binding queue '{queue_name}' to exchange '{exchange_name}' with key '{binding_key}'...")
@@ -61,7 +64,12 @@ class Command(BaseCommand):
                     self.handle_tool_deletion(data.get('tool_id'))
                 elif routing_key == 'model.capabilities.updated':
                     self.handle_capabilities_update(data.get('model_id'), data.get('new_capabilities'))
-        
+                
+                # --- THE FIX IS HERE: Add the new handler call ---
+                elif routing_key == 'memory.bucket.deleted':
+                    self.handle_memory_bucket_deletion(data.get('bucket_id'))
+                # --- END OF FIX ---
+
         except json.JSONDecodeError:
             self.stderr.write(self.style.ERROR(f"Could not decode message body: {body}"))
         except Exception as e:
@@ -77,8 +85,9 @@ class Command(BaseCommand):
 
     def handle_tool_deletion(self, tool_id):
         if not tool_id: return
+        # Using SQLite compatible loop
         candidate_nodes = Node.objects.select_for_update().filter(
-            status__in=[NodeStatus.ACTIVE, NodeStatus.ALTERED, NodeStatus.INACTIVE],
+            status__in=[NodeStatus.ACTIVE, NodeStatus.ALTERED],
             configuration__has_key='tool_config',
             configuration__tool_config__has_key='tool_ids'
         )
@@ -93,7 +102,8 @@ class Command(BaseCommand):
                 node.configuration['tool_config']['tool_ids'].remove(tool_id)
                 node.status = NodeStatus.ALTERED
                 node.save()
-            self.stdout.write(f"Altered and healed {len(nodes_to_process)} nodes for deleted tool {tool_id}")
+            self.stdout.write(self.style.SUCCESS(f"Altered and healed {len(nodes_to_process)} nodes for deleted tool {tool_id}"))
+
 
     def handle_capabilities_update(self, model_id, new_capabilities):
         if not model_id or new_capabilities is None:
@@ -126,3 +136,36 @@ class Command(BaseCommand):
             node.save()
             
         self.stdout.write(f"Proactively updated {nodes_to_update.count()} nodes for model {model_id} capability change.")
+    
+    # --- ADD THIS NEW HANDLER METHOD ---
+    def handle_memory_bucket_deletion(self, bucket_id):
+
+        """
+        Handles the event for a deleted memory bucket.
+        Finds all nodes using this bucket, clears the reference, and marks them as altered.
+        """
+        self.stdout.write(f"Handling memory bucket deletion for bucket ID: {bucket_id}")
+
+        if not bucket_id: return
+
+        # This query will work on SQLite because it's a direct equality check on a value.
+        nodes_to_update = Node.objects.select_for_update().filter(
+            status__in=[NodeStatus.ACTIVE, NodeStatus.ALTERED],
+            configuration__memory_config__bucket_id=bucket_id
+        )
+
+        if not nodes_to_update.exists():
+            return
+            
+        count = 0
+        for node in nodes_to_update:
+            # Heal the node by removing the reference
+            node.configuration['memory_config']['is_enabled'] = False
+            node.configuration['memory_config']['bucket_id'] = None
+            # Mark the node as altered to notify the user
+            node.status = NodeStatus.ALTERED
+            node.save()
+            count += 1
+            
+        self.stdout.write(self.style.SUCCESS(f"Altered and healed {count} nodes for deleted memory bucket {bucket_id}"))
+    # --- END OF NEW METHOD ---

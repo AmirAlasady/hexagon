@@ -1,10 +1,8 @@
 from .base_builder import BaseBuilder
 from app.execution.build_context import BuildContext
 from app.internals.clients import DataServiceClient
-from app.logging_config import logging
+from app.logging_config import logger # <-- Correct import
 import asyncio
-
-logger = logging.getLogger(__name__)
 
 class DataBuilder(BaseBuilder):
     """Fetches and parses on-the-fly data like user-uploaded files."""

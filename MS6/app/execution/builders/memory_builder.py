@@ -1,40 +1,47 @@
-# Builds the Memory
+# MS6/app/execution/builders/memory_builder.py
+
 from .base_builder import BaseBuilder
 from app.execution.build_context import BuildContext
 from app.logging_config import logger
-from langchain.memory import ConversationBufferWindowMemory, ConversationSummaryMemory
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
 
 class MemoryBuilder(BaseBuilder):
-    """Instantiates the correct LangChain memory object and loads history."""
+    """
+    Formats the conversation history received from the Memory Service
+    into a list of LangChain message objects. This version correctly and
+    safely parses the rich message format.
+    """
     async def build(self, context: BuildContext) -> BuildContext:
         job = context.job
         memory_context = job.memory_context
         
-        if not memory_context or not memory_context.get("bucket_id"):
-            return context # No memory configured for this job
+        if not memory_context or not memory_context.get("history"):
+            return context
 
-        memory_type = job.query.get("resource_overrides", {}).get("memory_type") or memory_context.get("memory_type")
-        logger.info(f"[{job.id}] Building memory of type: '{memory_type}'.")
-
-        if memory_type == "conversation_buffer_window":
-            memory = ConversationBufferWindowMemory(k=10, memory_key="chat_history", return_messages=True)
-            # Load history
-            for msg in memory_context.get("history", []):
-                if msg.get("role") == "user":
-                    memory.chat_memory.add_message(HumanMessage(content=msg["content"][0]["text"]))
-                elif msg.get("role") == "assistant":
-                    memory.chat_memory.add_message(AIMessage(content=msg["content"][0]["text"]))
-            context.memory = memory
-
-        elif memory_type == "summary":
-            # In a real system, the summary would be pre-calculated by the memory service
-            summary_text = memory_context.get("history", [{}])[0].get("content", "")
-            memory = ConversationSummaryMemory(llm=context.llm, memory_key="chat_history", return_messages=True)
-            memory.buffer = summary_text
-            context.memory = memory
+        logger.info(f"[{job.id}] Formatting chat history from Memory Service.")
         
-        else:
-            logger.warning(f"[{job.id}] Unsupported memory type '{memory_type}'. Skipping.")
+        history_messages: list[BaseMessage] = []
+        for msg in memory_context.get("history", []):
+            
+            # --- THE DEFINITIVE FIX IS HERE ---
+            role = msg.get("role")
+            content_dict = msg.get("content")
+            
+            # Safely extract the text content from the 'parts' array
+            text_content = ""
+            if isinstance(content_dict, list) and content_dict:
+                # Find the first part with type 'text' and get its content
+                first_text_part = next((part for part in content_dict if part.get("type") == "text"), None)
+                if first_text_part:
+                    text_content = first_text_part.get("text", "")
+            # --- END OF FIX ---
+            
+            if role == "user":
+                history_messages.append(HumanMessage(content=text_content))
+            elif role == "assistant":
+                history_messages.append(AIMessage(content=text_content))
         
+        context.memory = history_messages
+        
+        logger.info(f"[{job.id}] Formatted {len(history_messages)} messages from history.")
         return context

@@ -100,7 +100,7 @@ class ProjectDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
         
         # Define which services are expected to confirm their part of the cleanup.
         # This list defines the scope of this saga.
-        services_to_confirm = ['NodeService'] # Add 'MemoryService', etc. later
+        services_to_confirm = ['NodeService', 'MemoryService'] # Add 'MemoryService', etc. later
         for service_name in services_to_confirm:
             SagaStep.objects.create(saga=saga, service_name=service_name)
         

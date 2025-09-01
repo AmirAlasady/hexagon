@@ -1,7 +1,6 @@
-# Builds the Prompt Template
 from .base_builder import BaseBuilder
 from app.execution.build_context import BuildContext
-from app.logging_config import logger
+from app.logging_config import logger # <-- Correct import
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 class PromptBuilder(BaseBuilder):
@@ -10,7 +9,6 @@ class PromptBuilder(BaseBuilder):
         job = context.job
         logger.info(f"[{job.id}] Assembling final prompt.")
         
-        # Build context string from RAG and on-the-fly data
         context_str = ""
         if job.rag_docs:
             context_str += "--- Context from Knowledge Base ---\n"
@@ -27,15 +25,12 @@ class PromptBuilder(BaseBuilder):
         else:
             final_prompt_text = job.prompt_text
             
-        context.final_prompt_input = {"input": final_prompt_text}
+        context.final_input = {"input": final_prompt_text}
 
-        # Create the prompt template
         messages = [("system", "You are a helpful and intelligent AI assistant.")]
         if context.memory:
             messages.append(MessagesPlaceholder(variable_name="chat_history"))
-        
         messages.append(("user", "{input}"))
-        
         if context.tools:
             messages.append(MessagesPlaceholder(variable_name="agent_scratchpad"))
 

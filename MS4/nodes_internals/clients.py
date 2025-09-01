@@ -108,3 +108,26 @@ class ToolServiceClient(BaseServiceClient):
         
         # The _handle_response method will raise PermissionDenied on 403, etc.
         self._handle_response(response)
+
+
+
+class MemoryServiceClient(BaseServiceClient):
+    def __init__(self):
+        super().__init__("Memory Service", "MEMORY_SERVICE_URL")
+
+    def validate_buckets(self, jwt_token: str, bucket_ids: list[str]):
+        """
+        Calls the Memory Service's internal validation endpoint to check
+        if the user has permission to use the given bucket IDs.
+        """
+        headers = {"Authorization": f"Bearer {jwt_token}"}
+        payload = {"bucket_ids": bucket_ids}
+        # This path must match the one in MS9's internal_urls.py
+        internal_path = "/ms9/internal/v1/buckets/validate/"
+        
+        try:
+            response = self.client.post(internal_path, headers=headers, json=payload)
+            self._handle_response(response) # Will raise exceptions on 4xx/5xx errors
+        except (httpx.RequestError, httpx.HTTPStatusError) as e:
+            # Provide a more specific error if the service is down
+            raise ValidationError(f"Could not connect to Memory Service to validate buckets. Error: {e}")
