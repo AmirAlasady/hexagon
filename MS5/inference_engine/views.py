@@ -8,6 +8,11 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from .serializers import InferenceRequestSerializer
 from .services import InferenceOrchestrationService
 
+from messaging.event_publisher import inference_job_publisher 
+from django.conf import settings
+
+
+
 class InferenceAPIView(APIView):
     """
     The single entry point for initiating an inference job on a configured node.
@@ -38,7 +43,15 @@ class InferenceAPIView(APIView):
                 user_id=str(request.user.id),
                 query_data=serializer.validated_data
             )
-            
+
+            # Store a temporary mapping of job_id -> user_id in Redis for authorization during cancellation
+            job_id = result.get("job_id")
+            user_id = str(request.user.id)
+            if job_id:
+                job_owner_key = f"job:owner:{job_id}"
+                # Set with a 24-hour expiry. Adjust as needed for max job lifetime.
+                settings.REDIS_CLIENT.set(job_owner_key, user_id, ex=86400)
+
             # Step 3: Return a success response indicating the job was submitted
             return Response(result, status=status.HTTP_202_ACCEPTED)
         
@@ -63,3 +76,34 @@ class InferenceAPIView(APIView):
                 {"error": "An unexpected server error occurred during job orchestration."}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class JobCancellationAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, job_id):
+        requesting_user_id = str(request.user.id)
+        job_id_str = str(job_id)
+
+        # --- AUTHORIZATION LOGIC ---
+        job_owner_key = f"job:owner:{job_id_str}"
+        stored_owner_id = settings.REDIS_CLIENT.get(job_owner_key)
+
+        if not stored_owner_id:
+            # Job is either complete, never existed, or expired.
+            # From a security perspective, we treat it as "not found".
+            return Response({"error": "Job not found or has already completed."}, status=status.HTTP_404_NOT_FOUND)
+
+        if stored_owner_id != requesting_user_id:
+            # The user making the request is NOT the user who started the job.
+            return Response({"error": "You do not have permission to cancel this job."}, status=status.HTTP_403_FORBIDDEN)
+        # --- END OF AUTHORIZATION LOGIC ---
+
+        try:
+            inference_job_publisher.publish_cancellation_request(job_id_str, requesting_user_id)
+            # Once cancellation is requested, we can remove the ownership key.
+            settings.REDIS_CLIENT.delete(job_owner_key)
+            return Response({"message": "Job cancellation request has been broadcast."}, status=status.HTTP_202_ACCEPTED)
+        except Exception as e:
+            print(f"CRITICAL: Could not publish cancellation event for job {job_id_str}: {e}")
+            return Response({"error": "Could not send cancellation signal due to a messaging system error."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)

@@ -1,4 +1,4 @@
-# MS5/messaging/rabbitmq_client.py (Definitive Resilient & Flexible Version)
+# messaging/rabbitmq_client.py (Definitive Resilient Version)
 
 import pika
 import json
@@ -11,8 +11,6 @@ class RabbitMQClient:
     A robust, thread-safe RabbitMQ client that manages connections on a per-thread
     basis, uses a fresh channel per operation, and includes an automatic retry
     mechanism for publishing messages to handle transient network failures.
-    
-    This version allows specifying the exchange type during publish.
     """
     _thread_local = threading.local()
 
@@ -43,30 +41,16 @@ class RabbitMQClient:
             del self._thread_local.connection
         print(f"Thread {threading.get_ident()}: Invalidated RabbitMQ connection.")
 
-    # --- THE FIX IS IN THIS METHOD SIGNATURE AND THE 'exchange_declare' CALL ---
-    def publish(self, exchange_name, routing_key, body, exchange_type='topic'):
+    def publish(self, exchange_name, routing_key, body):
         """
         Publishes a message with a built-in retry mechanism.
-        
-        Args:
-            exchange_name (str): The name of the exchange.
-            routing_key (str): The routing key for the message.
-            body (dict): The message payload (will be JSON serialized).
-            exchange_type (str): The type of the exchange ('topic', 'fanout', etc.).
-                                 Defaults to 'topic' for backward compatibility.
         """
         attempt = 0
         while attempt < self.max_retries:
             try:
                 connection = self._get_connection()
                 with connection.channel() as channel:
-                    # Use the provided exchange_type when declaring the exchange.
-                    channel.exchange_declare(
-                        exchange=exchange_name, 
-                        exchange_type=exchange_type, 
-                        durable=True
-                    )
-                    
+                    channel.exchange_declare(exchange=exchange_name, exchange_type='topic', durable=True)
                     message_body = json.dumps(body, default=str)
                     channel.basic_publish(
                         exchange=exchange_name,
@@ -77,7 +61,7 @@ class RabbitMQClient:
                             delivery_mode=pika.DeliveryMode.Persistent,
                         )
                     )
-                    print(f" [x] Sent '{routing_key}':'{message_body}' to '{exchange_name}' ({exchange_type}) on attempt {attempt + 1}")
+                    print(f" [x] Sent '{routing_key}':'{message_body}' on attempt {attempt + 1}")
                     return # --- SUCCESS, exit the loop ---
 
             except (pika.exceptions.AMQPError, OSError) as e:
@@ -89,7 +73,6 @@ class RabbitMQClient:
                 else:
                     print(f"CRITICAL: Failed to publish message after {self.max_retries} attempts.")
                     raise  # Re-raise the final exception
-    # --- END OF FIX ---
 
 # Create a single, globally accessible instance.
 rabbitmq_client = RabbitMQClient()

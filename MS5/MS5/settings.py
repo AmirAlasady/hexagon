@@ -5,6 +5,7 @@ from pathlib import Path
 from datetime import timedelta
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+import redis
 
 from dotenv import load_dotenv
 load_dotenv(BASE_DIR / '.env')
@@ -22,8 +23,9 @@ DEBUG = os.getenv('DJANGO_DEBUG', 'True').lower() in ('true', '1', 't')
 import redis
 
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-REDIS_CLIENT = redis.from_url(REDIS_URL)
+REDIS_CLIENT = redis.from_url(REDIS_URL, decode_responses=True)
 ALLOWED_HOSTS = ['*']
+
 
 
 # Application definition

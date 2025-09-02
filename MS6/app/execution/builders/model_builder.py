@@ -57,7 +57,7 @@ class ModelBuilder(BaseBuilder):
                 raise ValueError(f"Dynamically failed to find 'api_key' in OpenAI configuration.")
             context.llm = ChatOpenAI(api_key=api_key, model=model_name, **final_params)
 
-        elif provider == "ollama":
+        elif provider == "ollama" or "ollamaDeepSeek":
             model_name = final_params.pop("model_name", find_config_value(config_values, "model_name"))
             base_url = final_params.pop("base_url", find_config_value(config_values, "base_url"))
 
