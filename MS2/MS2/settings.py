@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv(BASE_DIR / '.env')
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
-
+SESSION_COOKIE_NAME = "proj_sessionid2"
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
 if not SECRET_KEY:
     # This fallback should ideally not be hit if .env is loaded correctly

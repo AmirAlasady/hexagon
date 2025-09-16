@@ -65,7 +65,7 @@ class Executor:
             await self.publisher.publish_final_result(self.job.id, final_result)
         
         # 4. Trigger the memory feedback loop after the job is fully complete.
-        await self.publisher.publish_memory_update(self.job, final_result)
+        await self.publisher.publish_memory_update(self.job, final_result, self.context.final_input) # new update 
 
     async def _stream_and_publish(self, chain, input_data: dict) -> str:
         """

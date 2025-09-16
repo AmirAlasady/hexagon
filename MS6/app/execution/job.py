@@ -14,6 +14,7 @@ class Job:
         self.param_overrides = self.query.get("parameter_overrides", {})
         self.output_config = self.query.get("output_config", {})
         self.is_streaming = self.output_config.get("mode") == "streaming"
+        self.persist_inputs_in_memory = self.output_config.get("persist_inputs_in_memory", False)
 
         # --- THE DEFENSIVE FIX IS HERE ---
         # Get the resources dictionary, defaulting to an empty dict if it's missing or None.

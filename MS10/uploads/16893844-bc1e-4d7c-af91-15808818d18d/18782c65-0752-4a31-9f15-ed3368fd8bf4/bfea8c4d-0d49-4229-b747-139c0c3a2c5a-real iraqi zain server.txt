@@ -1,0 +1,17 @@
+public ip:
+5.181.196.220
+
+domain:
+https://app.najahi.website/
+
+Management:
+vpn via cisco client:
+user: B2B.Najahi
+Password : 4N.QxP630;~5
+
+then ssh to 	~ :
+10.186.16.53/29
+
+in machine vm :
+username:admin1 & root
+password: admin12345

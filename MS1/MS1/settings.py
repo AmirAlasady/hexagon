@@ -9,7 +9,7 @@ load_dotenv(BASE_DIR / '.env')
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
 JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')
 DEBUG = os.getenv('DJANGO_DEBUG', 'False').lower() in ('true', '1', 't')
-
+SESSION_COOKIE_NAME = "proj_sessionid1"
 ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [

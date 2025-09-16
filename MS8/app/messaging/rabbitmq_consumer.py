@@ -39,6 +39,7 @@ class RabbitMQConsumer:
         """Callback for processing a message from the results queue."""
         async with message.process():
             try:
+                message_body_bytes = message.body
                 body = json.loads(message.body.decode())
                 job_id = body.get("job_id")
                 
@@ -46,6 +47,17 @@ class RabbitMQConsumer:
                     logger.warning(f"Received message without job_id: {body}")
                     return
 
+                redis_key = f"job:result:{job_id}"
+                
+                # Use a pipeline for atomic operations
+                pipe = config.redis_client.pipeline()
+                # RPUSH adds the message to the end of the list
+                pipe.rpush(redis_key, message_body_bytes) 
+                # Set a 5-minute expiry on the key every time we add to it
+                pipe.expire(redis_key, 300) 
+                pipe.execute()
+                
+                logger.info(f"Cached message for job_id: {job_id} in Redis.")
                 await manager.send_message(job_id, body)
 
                 # If the job is finished, close the connection

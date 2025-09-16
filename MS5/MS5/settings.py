@@ -9,6 +9,7 @@ import redis
 
 from dotenv import load_dotenv
 load_dotenv(BASE_DIR / '.env')
+SESSION_COOKIE_NAME = "proj_sessionid5"
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 MEMORY_SERVICE_GRPC_URL = os.getenv('MEMORY_SERVICE_GRPC_URL')
@@ -191,7 +192,7 @@ RABBITMQ_URL = os.getenv('RABBITMQ_URL', 'amqp://guest:guest@localhost:5672/')
 NODE_SERVICE_GRPC_URL = os.getenv('NODE_SERVICE_GRPC_URL')
 MODEL_SERVICE_GRPC_URL = os.getenv('MODEL_SERVICE_GRPC_URL')
 TOOL_SERVICE_GRPC_URL = os.getenv('TOOL_SERVICE_GRPC_URL')
-
+DATA_SERVICE_GRPC_URL = os.getenv('DATA_SERVICE_GRPC_URL')
 
 
 

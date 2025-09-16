@@ -33,6 +33,33 @@ def validate_and_consume_ticket(ticket: str) -> Optional[dict]:
     except Exception as e:
         logger.error(f"Redis error during ticket validation: {e}", exc_info=True)
         return None
+    
+async def replay_cached_results(websocket: WebSocket, job_id: str):
+    """
+    Checks Redis for cached results for a job_id and sends them to the client.
+    """
+    redis_key = f"job:result:{job_id}"
+    try:
+        # LRANGE 0 -1 gets all elements from the list
+        cached_messages = redis_client.lrange(redis_key, 0, -1)
+        if not cached_messages:
+            logger.info(f"No cached results found for job_id: {job_id}")
+            return
+
+        logger.info(f"Found {len(cached_messages)} cached messages for job_id: {job_id}. Replaying now...")
+        is_final_message = False
+        for msg_bytes in cached_messages:
+            msg_data = json.loads(msg_bytes.decode())
+            await websocket.send_json(msg_data)
+            if msg_data.get("status") in ["success", "error"]:
+                is_final_message = True
+        
+        # If the final message was in the cache, we can close the connection now.
+        if is_final_message:
+            await manager.close_connection(job_id)
+
+    except Exception as e:
+        logger.error(f"Error replaying cached results for job_id {job_id}: {e}", exc_info=True)
 
 @router.websocket("/ws/results/")
 async def websocket_endpoint(websocket: WebSocket, ticket: Optional[str] = Query(None)):
@@ -49,6 +76,7 @@ async def websocket_endpoint(websocket: WebSocket, ticket: Optional[str] = Query
     # user_id = ticket_data.get("user_id") # You can use this for logging or further auth
     
     await manager.connect(websocket, job_id)
+    await replay_cached_results(websocket, job_id)
     
     try:
         # Keep the connection alive by listening for messages from the client.

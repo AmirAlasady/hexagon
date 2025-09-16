@@ -33,6 +33,7 @@ grpcio-tools
 protobuf
 google-api-python-client
 
+
 # LangChain and AI
 langchain
 langchain-openai # Needed for ConversationSummaryMemory

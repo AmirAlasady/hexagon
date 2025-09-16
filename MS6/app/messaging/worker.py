@@ -119,34 +119,3 @@ class RabbitMQWorker:
                 logger.error(f"RabbitMQ connection lost: {e}. Retrying in 5 seconds...")
                 await asyncio.sleep(5)
 
-    async def run(self):
-        """Starts the worker and listens for messages indefinitely."""
-        while True:
-            try:
-                self.connection = await aio_pika.connect_robust(config.RABBITMQ_URL, loop=asyncio.get_event_loop())
-                async with self.connection:
-                    self.result_publisher = ResultPublisher(self.connection)
-                    channel = await self.connection.channel()
-                    
-                    # Set the Quality of Service: how many messages to pre-fetch.
-                    # This is the knob for intra-worker concurrency.
-                    await channel.set_qos(prefetch_count=self.prefetch_count)
-                    logger.info(f"Worker QoS set to {self.prefetch_count}. Ready to process jobs concurrently.")
-                    
-                    exchange = await channel.declare_exchange('inference_exchange', aio_pika.ExchangeType.TOPIC, durable=True)
-                    queue = await channel.declare_queue('inference_jobs_queue', durable=True)
-                    await queue.bind(exchange, 'inference.job.start')
-                    
-                    logger.info(" [*] Inference Executor Worker is ready and waiting for jobs.")
-                    
-                    # Use an iterator and create background tasks for true concurrency
-                    async with queue.iterator() as queue_iter:
-                        async for message in queue_iter:
-                            # Schedule the processing of the message as a background task.
-                            # The loop does not wait for it to finish and can immediately
-                            # fetch the next message up to the prefetch_count limit.
-                            asyncio.create_task(self.process_message(message))
-
-            except aio_pika.exceptions.AMQPConnectionError as e:
-                logger.error(f"RabbitMQ connection lost: {e}. Retrying in 5 seconds...")
-                await asyncio.sleep(5)

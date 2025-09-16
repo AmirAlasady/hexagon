@@ -53,7 +53,9 @@ class MemoryBucketListAPIView(generics.ListAPIView):
     serializer_class = MemoryBucketListSerializer
     
     def get_queryset(self):
+        service = MemoryService()
         project_id = self.kwargs['project_id']
+        service._validate_project_ownership(project_id, str(self.request.auth))
         return MemoryBucket.objects.filter(owner_id=self.request.user.id, project_id=project_id)
 
 class MemoryBucketDetailAPIView(generics.RetrieveUpdateDestroyAPIView):

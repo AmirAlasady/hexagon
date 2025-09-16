@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv(BASE_DIR / '.env')
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
-
+SESSION_COOKIE_NAME = "proj_sessionid7"
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
 # REST Framework
 JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')

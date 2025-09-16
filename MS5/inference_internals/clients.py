@@ -10,6 +10,7 @@ from .generated import node_pb2, node_pb2_grpc
 from .generated import model_pb2, model_pb2_grpc
 from .generated import tool_pb2, tool_pb2_grpc
 from .generated import memory_pb2, memory_pb2_grpc
+from .generated import data_pb2, data_pb2_grpc # <-- NEW
 
 class NodeServiceClient:
     """A gRPC client for interacting with the Node Service (MS4)."""
@@ -98,3 +99,29 @@ class MemoryServiceClient:
             raise RuntimeError(f"A gRPC error occurred while contacting the Memory Service: {e.details()}")
         except Exception as e:
             raise RuntimeError(f"Unexpected error in MemoryServiceClient: {e}")
+        
+
+class DataServiceClient:
+    """A gRPC client for interacting with the Data Service (MS10)."""
+    def get_file_metadata(self, file_ids: list[str], user_id: str) -> list[dict]:
+        """
+        Fetches metadata for a list of files, validating ownership.
+        Used by the orchestrator for pre-flight checks.
+        """
+        if not file_ids:
+            return []
+            
+        try:
+            with grpc.insecure_channel(settings.DATA_SERVICE_GRPC_URL) as channel:
+                stub = data_pb2_grpc.DataServiceStub(channel)
+                request = data_pb2.GetFileMetadataRequest(file_ids=file_ids, user_id=user_id)
+                response = stub.GetFileMetadata(request, timeout=10)
+                
+                return [MessageToDict(m, preserving_proto_field_name=True) for m in response.metadata]
+
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.NOT_FOUND:
+                raise NotFound("One or more of the specified files were not found or you do not have permission to use them.")
+            raise RuntimeError(f"gRPC error from Data Service (GetFileMetadata): {e.details()}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error in DataServiceClient: {e}")

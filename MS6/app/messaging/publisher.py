@@ -56,28 +56,47 @@ class ResultPublisher:
             {"job_id": job_id, "status": "error", "error": error_message}
         )
 
-    async def publish_memory_update(self, job, final_result: str):
-        """Triggers the memory feedback loop."""
+    async def publish_memory_update(self, job, final_result, final_input: dict):
+        """
+        Triggers the memory feedback loop.
+        It uses the `persist_inputs_in_memory` flag to decide what to save as the user's prompt.
+        """
         memory_ids = job.feedback_ids
         bucket_id = memory_ids.get("memory_bucket_id")
         
         if not bucket_id:
-            logger.info(f"[{job.id}] No memory_bucket_id found in job. Skipping memory update feedback.")
+            logger.info(f"[{job.id}] No memory_bucket_id found in job. Skipping memory update.")
             return
 
         logger.info(f"[{job.id}] Preparing to publish memory update for bucket: {bucket_id}")
-        
-        user_message = {"role": "user", "content": [{"type": "text", "text": job.prompt_text}]}
-        for inp in job.inputs:
-            if inp.get('type') == 'file_id':
-                user_message['content'].append({"type": "file_ref", "file_id": inp.get('id')})
-            elif inp.get('type') == 'image_url':
-                user_message['content'].append({"type": "image_ref", "url": inp.get('url')})
 
-        assistant_message = {
-            "role": "assistant",
-            "content": [{"type": "text", "text": final_result}]
-        }
+        prompt_to_save = ""
+        # Your logic is implemented here:
+        if job.persist_inputs_in_memory:
+            # The flag is true, so we save the combined prompt with file content.
+            prompt_to_save = final_input.get("input", job.prompt_text)
+            logger.info(f"[{job.id}] Persistence flag is ON. Saving full context to memory.")
+        else:
+            # The flag is false (or absent), so we only save the user's original typed prompt.
+            prompt_to_save = job.prompt_text
+            logger.info(f"[{job.id}] Persistence flag is OFF. Saving original prompt to memory.")
+        
+        # This part of the logic remains the same, building the rich content object.
+        # It now uses the correctly selected prompt_to_save.
+        user_message_content = [{"type": "text", "text": prompt_to_save}]
+        if not job.persist_inputs_in_memory:
+            # If we are NOT persisting, we still add the file references for UI display.
+            for inp in job.inputs:
+                if inp.get('type') == 'file_id':
+                    user_message_content.append({"type": "file_ref", "file_id": inp.get('id')})
+
+        user_message = {"role": "user", "content": user_message_content}
+
+        assistant_content = [{"type": "text", "text": final_result}]
+        if isinstance(final_result, dict):
+            assistant_content = [final_result]
+
+        assistant_message = {"role": "assistant", "content": assistant_content}
         
         update_payload = {
             "idempotency_key": job.id,

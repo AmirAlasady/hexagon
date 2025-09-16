@@ -3,79 +3,104 @@
 from .base_builder import BaseBuilder
 from app.execution.build_context import BuildContext
 from app.logging_config import logger
+import json
+
+# Text model imports
 from langchain_openai import ChatOpenAI
 from langchain_community.chat_models import ChatOllama
 from langchain_google_genai import ChatGoogleGenerativeAI
+# Import the required enums for the modern Gemini API
+#from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-def find_config_value(config: dict, key_to_find: str):
-    """
-    Recursively searches a nested dictionary for a specific key.
-    It prioritizes direct values but will look inside 'properties' and 'default'.
-    """
-    if not isinstance(config, dict):
-        return None
-
-    # Priority 1: Check for the key at the current level
-    if key_to_find in config:
-        return config[key_to_find]
-
-    # Priority 2: Recursively search through all values in the dictionary
-    for key, value in config.items():
-        if isinstance(value, dict):
-            found = find_config_value(value, key_to_find)
-            if found is not None:
-                # Special case for blueprints: if we found the key in a 'properties'
-                # block, we are looking for its 'default' value.
-                if key == 'properties' and isinstance(found, dict) and 'default' in found:
-                    return found['default']
-                # If it's just a value, return it
-                elif not isinstance(found, dict):
-                    return found
-    return None
+# Image model imports (commented out as per your code, but kept for future use)
+# import torch
+# from diffusers import DiffusionPipeline
 
 class ModelBuilder(BaseBuilder):
     """
-    Instantiates the correct LangChain chat model using a dynamic,
-    introspective approach to parse any valid configuration structure.
+    Instantiates the correct model pipeline. This definitive version correctly
+    parses the nested schema structure for credentials and parameters and uses
+    the modern, safe API for Google Gemini.
     """
+    
+    def _get_value_from_schema(self, schema_block: dict, key: str, value_field: str = 'default') -> any:
+        """
+        A robust helper to find a key within a nested 'properties' block
+        and return the value from a specified field (e.g., 'default').
+        """
+        properties = schema_block.get("properties", {})
+        if key in properties and isinstance(properties[key], dict):
+            return properties[key].get(value_field)
+        return None
+
     async def build(self, context: BuildContext) -> BuildContext:
         job = context.job
         model_data = job.model_config
         
         provider = model_data.get("provider")
-        config_values = model_data.get("configuration", {})
-
+        # This is the full JSON object from MS3, including the schema and nested values
+        # from the user-configured model.
+        full_config = model_data.get("configuration", {})
+        
         final_params = {**job.default_params, **job.param_overrides}
         
-        logger.info(f"[{job.id}] Building LLM for provider: '{provider}' using dynamic config parser.")
+        logger.info(f"[{job.id}] Building model for provider: '{provider}' using definitive schema parser.")
+        logger.debug(f"[{job.id}] Full configuration received:\n{json.dumps(full_config, indent=2)}")
 
-        if provider == "openai":
-            api_key = find_config_value(config_values, "api_key")
-            model_name = final_params.pop("model_name", find_config_value(config_values, "model_name")) or "gpt-4o"
+        if provider == "google":
+            credentials_schema = full_config.get("credentials", {})
+            parameters_schema = full_config.get("parameters", {})
 
-            if not api_key:
-                raise ValueError(f"Dynamically failed to find 'api_key' in OpenAI configuration.")
-            context.llm = ChatOpenAI(api_key=api_key, model=model_name, **final_params)
-
-        elif provider == "ollama" or "ollamaDeepSeek":
-            model_name = final_params.pop("model_name", find_config_value(config_values, "model_name"))
-            base_url = final_params.pop("base_url", find_config_value(config_values, "base_url"))
-
-            if not model_name or not base_url:
-                raise ValueError(f"Dynamically failed to find 'base_url' or 'model_name' in Ollama configuration.")
+            # 1. Extract the API key from the 'default' field of the credentials schema
+            api_key = self._get_value_from_schema(credentials_schema, "api_key", value_field='default')
             
+            if not api_key:
+                raise ValueError("Could not extract 'api_key' from the model configuration's 'credentials.properties.api_key.default' field.")
+
+            # 2. Get model_name, prioritizing user override, then the schema default.
+            model_name = final_params.pop("model_name", self._get_value_from_schema(parameters_schema, "model_name"))
+            if not model_name:
+                raise ValueError("Could not determine 'model_name'.")
+            
+            # 3. Define the mandatory safety settings for the modern API
+            #safety_settings = {
+            #    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            #    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            #    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            #    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            #}
+
+            context.llm = ChatGoogleGenerativeAI(
+                google_api_key=api_key, 
+                model=model_name, 
+                #safety_settings=safety_settings,
+                **final_params
+            )
+            logger.info(f"[{job.id}] Successfully built Google Gemini model '{model_name}'.")
+
+        elif provider == "ollama":
+            credentials_schema = full_config.get("credentials", {})
+            parameters_schema = full_config.get("parameters", {})
+            
+            base_url = self._get_value_from_schema(credentials_schema, "base_url")
+            if not base_url:
+                raise ValueError("Could not extract 'base_url' from the Ollama model configuration.")
+            
+            model_name = final_params.pop("model_name", self._get_value_from_schema(parameters_schema, "model_name"))
+            if not model_name:
+                raise ValueError("Could not determine 'model_name' for Ollama.")
+                
             context.llm = ChatOllama(base_url=base_url, model=model_name, **final_params)
-            
-        elif provider == "google":
-            api_key = find_config_value(config_values, "api_key")
-            model_name = final_params.pop("model_name", find_config_value(config_values, "model_name")) or "gemini-pro"
-            
-            if not api_key:
-                 raise ValueError(f"Dynamically failed to find 'api_key' in Google configuration.")
-            context.llm = ChatGoogleGenerativeAI(google_api_key=api_key, model=model_name, **final_params)
+            logger.info(f"[{job.id}] Successfully built Ollama model '{model_name}' on '{base_url}'.")
+
+        # Your image generation logic is preserved.
+        # elif provider == "huggingface_diffusers":
+        #    ...
             
         else:
-            raise ValueError(f"Unsupported LLM provider: '{provider}'")
+            # Added a check to avoid trying to build an image model as a text model
+            if provider != "huggingface_diffusers":
+                 raise ValueError(f"Unsupported text model provider: '{provider}'")
         
-        logger.info(f"[{job.id}] LLM '{config_values.get('model_name') or model_name}' on provider '{provider}' built successfully.")
+        logger.info(f"[{job.id}] Model building complete.")
         return context

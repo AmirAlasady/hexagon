@@ -1,0 +1,3021 @@
+│   .env
+│   [
+│       RABBITMQ_URL=amqp://guest:guest@localhost:5672/
+│       TOOL_SERVICE_GRPC_URL=localhost:50057
+│       DATA_SERVICE_GRPC_URL=localhost:50058
+│   ]
+│   WEF.txt
+│   [
+│       │   .env
+│       │   [
+│       │       RABBITMQ_URL=amqp://guest:guest@localhost:5672/
+│       │       TOOL_SERVICE_GRPC_URL=localhost:50057
+│       │       # DATA_SERVICE_URL=http://localhost:50058
+│       │   ]
+│       ├───app
+│       │   __init__.py
+│       │   [
+│       │       
+│       │   ]
+│       │   config.py
+│       │   [
+│       │       import os
+│       │       from dotenv import load_dotenv
+│       │       
+│       │       load_dotenv()
+│       │       
+│       │       RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
+│       │       TOOL_SERVICE_GRPC_URL = os.getenv("TOOL_SERVICE_GRPC_URL")
+│       │       DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL")
+│       │   ]
+│       │   ├───execution
+│       │   │   __init__.py
+│       │   │   [
+│       │   │       
+│       │   │   ]
+│       │   │   build_context.py
+│       │   │   [
+│       │   │       from dataclasses import dataclass, field
+│       │   │       from langchain_core.language_models import BaseChatModel
+│       │   │       from langchain_core.memory import BaseMemory
+│       │   │       from langchain_core.tools import BaseTool
+│       │   │       from langchain_core.prompts import ChatPromptTemplate
+│       │   │       from app.execution.job import Job
+│       │   │       
+│       │   │       @dataclass
+│       │   │       class BuildContext:
+│       │   │           """Holds the state of the chain construction process. Each builder populates a field."""
+│       │   │           job: Job
+│       │   │           llm: BaseChatModel = None
+│       │   │           memory: BaseMemory = None
+│       │   │           tools: list[BaseTool] = field(default_factory=list)
+│       │   │           prompt_template: ChatPromptTemplate = None
+│       │   │           on_the_fly_data: list[dict] = field(default_factory=list)
+│       │   │           final_input: dict = field(default_factory=dict)
+│       │   │   ]
+│       │   │   ├───builders
+│       │   │   │   __init__.py
+│       │   │   │   [
+│       │   │   │       
+│       │   │   │   ]
+│       │   │   │   base_builder.py
+│       │   │   │   [
+│       │   │   │       # Abstract base class for all builders
+│       │   │   │       from abc import ABC, abstractmethod
+│       │   │   │       from app.execution.build_context import BuildContext
+│       │   │   │       
+│       │   │   │       class BaseBuilder(ABC):
+│       │   │   │           """Abstract base class for all components in the chain construction pipeline."""
+│       │   │   │           
+│       │   │   │           @abstractmethod
+│       │   │   │           async def build(self, context: BuildContext) -> BuildContext:
+│       │   │   │               """
+│       │   │   │               Processes the input context, adds its component, and returns the modified context.
+│       │   │   │               """
+│       │   │   │               pass
+│       │   │   │   ]
+│       │   │   │   data_builder.py
+│       │   │   │   [
+│       │   │   │       from .base_builder import BaseBuilder
+│       │   │   │       from app.execution.build_context import BuildContext
+│       │   │   │       from app.internals.clients import DataServiceClient
+│       │   │   │       from app.logging_config import logging
+│       │   │   │       import asyncio
+│       │   │   │       
+│       │   │   │       logger = logging.getLogger(__name__)
+│       │   │   │       
+│       │   │   │       class DataBuilder(BaseBuilder):
+│       │   │   │           """Fetches and parses on-the-fly data like user-uploaded files."""
+│       │   │   │           def __init__(self):
+│       │   │   │               self.data_client = DataServiceClient()
+│       │   │   │       
+│       │   │   │           async def build(self, context: BuildContext) -> BuildContext:
+│       │   │   │               if not context.job.inputs:
+│       │   │   │                   return context
+│       │   │   │       
+│       │   │   │               logger.info(f"[{context.job.id}] Fetching content for {len(context.job.inputs)} on-the-fly inputs.")
+│       │   │   │               
+│       │   │   │               fetch_tasks = [
+│       │   │   │                   self.data_client.get_file_content(inp['id'])
+│       │   │   │                   for inp in context.job.inputs if inp.get('type') == 'file_id'
+│       │   │   │               ]
+│       │   │   │               
+│       │   │   │               results = await asyncio.gather(*fetch_tasks)
+│       │   │   │               context.on_the_fly_data = results
+│       │   │   │               
+│       │   │   │               logger.info(f"[{context.job.id}] Successfully fetched {len(results)} on-the-fly data item(s).")
+│       │   │   │               return context
+│       │   │   │   ]
+│       │   │   │   memory_builder.py
+│       │   │   │   [
+│       │   │   │       # Builds the Memory
+│       │   │   │       from .base_builder import BaseBuilder
+│       │   │   │       from app.execution.build_context import BuildContext
+│       │   │   │       from app.logging_config import setup_logging
+│       │   │   │       from langchain.memory import ConversationBufferWindowMemory, ConversationSummaryMemory
+│       │   │   │       from langchain_core.messages import AIMessage, HumanMessage
+│       │   │   │       
+│       │   │   │       logger = setup_logging()
+│       │   │   │       
+│       │   │   │       class MemoryBuilder(BaseBuilder):
+│       │   │   │           """Instantiates the correct LangChain memory object and loads history."""
+│       │   │   │           async def build(self, context: BuildContext) -> BuildContext:
+│       │   │   │               job = context.job
+│       │   │   │               memory_context = job.memory_context
+│       │   │   │               
+│       │   │   │               if not memory_context or not memory_context.get("bucket_id"):
+│       │   │   │                   return context # No memory configured for this job
+│       │   │   │       
+│       │   │   │               memory_type = job.query.get("resource_overrides", {}).get("memory_type") or memory_context.get("memory_type")
+│       │   │   │               logger.info(f"[{job.id}] Building memory of type: '{memory_type}'.")
+│       │   │   │       
+│       │   │   │               if memory_type == "conversation_buffer_window":
+│       │   │   │                   memory = ConversationBufferWindowMemory(k=10, memory_key="chat_history", return_messages=True)
+│       │   │   │                   # Load history
+│       │   │   │                   for msg in memory_context.get("history", []):
+│       │   │   │                       if msg.get("role") == "user":
+│       │   │   │                           memory.chat_memory.add_message(HumanMessage(content=msg["content"][0]["text"]))
+│       │   │   │                       elif msg.get("role") == "assistant":
+│       │   │   │                           memory.chat_memory.add_message(AIMessage(content=msg["content"][0]["text"]))
+│       │   │   │                   context.memory = memory
+│       │   │   │       
+│       │   │   │               elif memory_type == "summary":
+│       │   │   │                   # In a real system, the summary would be pre-calculated by the memory service
+│       │   │   │                   summary_text = memory_context.get("history", [{}])[0].get("content", "")
+│       │   │   │                   memory = ConversationSummaryMemory(llm=context.llm, memory_key="chat_history", return_messages=True)
+│       │   │   │                   memory.buffer = summary_text
+│       │   │   │                   context.memory = memory
+│       │   │   │               
+│       │   │   │               else:
+│       │   │   │                   logger.warning(f"[{job.id}] Unsupported memory type '{memory_type}'. Skipping.")
+│       │   │   │               
+│       │   │   │               return context
+│       │   │   │   ]
+│       │   │   │   model_builder.py
+│       │   │   │   [
+│       │   │   │       # Builds the LLM
+│       │   │   │       from .base_builder import BaseBuilder
+│       │   │   │       from app.execution.build_context import BuildContext
+│       │   │   │       #from app.logging_config import logger
+│       │   │   │       from langchain_openai import ChatOpenAI
+│       │   │   │       from langchain_anthropic import ChatAnthropic
+│       │   │   │       from langchain_google_genai import ChatGoogleGenerativeAI
+│       │   │   │       from langchain_community.chat_models import ChatOllama
+│       │   │   │       
+│       │   │   │       from app.logging_config import setup_logging
+│       │   │   │       import logging
+│       │   │   │       logger = setup_logging()
+│       │   │   │       
+│       │   │   │       class ModelBuilder(BaseBuilder):
+│       │   │   │           """Instantiates the correct LangChain chat model based on the job's provider."""
+│       │   │   │           async def build(self, context: BuildContext) -> BuildContext:
+│       │   │   │               job = context.job
+│       │   │   │               provider = job.model_config.get("provider")
+│       │   │   │               credentials = job.model_config.get("configuration", {})
+│       │   │   │               final_params = {**job.default_params, **job.param_overrides}
+│       │   │   │               
+│       │   │   │               logger.info(f"[{job.id}] Building LLM for provider: '{provider}'.")
+│       │   │   │       
+│       │   │   │               if provider == "openai":
+│       │   │   │                   context.llm = ChatOpenAI(
+│       │   │   │                       api_key=credentials.get("api_key"),
+│       │   │   │                       model=final_params.pop("model_name", "gpt-4o"),
+│       │   │   │                       streaming=True, **final_params
+│       │   │   │                   )
+│       │   │   │               elif provider == "anthropic":
+│       │   │   │                   context.llm = ChatAnthropic(
+│       │   │   │                       api_key=credentials.get("anthropic_api_key"),
+│       │   │   │                       model=final_params.pop("model_name", "claude-3-opus-20240229"),
+│       │   │   │                       **final_params
+│       │   │   │                   )
+│       │   │   │               elif provider == "google":
+│       │   │   │                   context.llm = ChatGoogleGenerativeAI(
+│       │   │   │                       google_api_key=credentials.get("google_api_key"),
+│       │   │   │                       model=final_params.pop("model_name", "gemini-pro"),
+│       │   │   │                       **final_params
+│       │   │   │                   )
+│       │   │   │               elif provider == "ollama":
+│       │   │   │                   context.llm = ChatOllama(
+│       │   │   │                       base_url=credentials.get("base_url"),
+│       │   │   │                       model=final_params.pop("model_name", "llama3"),
+│       │   │   │                       **final_params
+│       │   │   │                   )
+│       │   │   │               else:
+│       │   │   │                   raise ValueError(f"Unsupported LLM provider: {provider}")
+│       │   │   │               
+│       │   │   │               logger.info(f"[{job.id}] LLM built successfully.")
+│       │   │   │               return context
+│       │   │   │   ]
+│       │   │   │   prompt_builder.py
+│       │   │   │   [
+│       │   │   │       # Builds the Prompt Template
+│       │   │   │       from .base_builder import BaseBuilder
+│       │   │   │       from app.execution.build_context import BuildContext
+│       │   │   │       from app.logging_config import setup_logging
+│       │   │   │       from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+│       │   │   │       
+│       │   │   │       logger = setup_logging()
+│       │   │   │       
+│       │   │   │       class PromptBuilder(BaseBuilder):
+│       │   │   │           """Assembles the final prompt template and input variables."""
+│       │   │   │           async def build(self, context: BuildContext) -> BuildContext:
+│       │   │   │               job = context.job
+│       │   │   │               logger.info(f"[{job.id}] Assembling final prompt.")
+│       │   │   │               
+│       │   │   │               # Build context string from RAG and on-the-fly data
+│       │   │   │               context_str = ""
+│       │   │   │               if job.rag_docs:
+│       │   │   │                   context_str += "--- Context from Knowledge Base ---\n"
+│       │   │   │                   for doc in job.rag_docs:
+│       │   │   │                       context_str += f"Content: {doc.get('content')}\n\n"
+│       │   │   │               
+│       │   │   │               if context.on_the_fly_data:
+│       │   │   │                   context_str += "--- Context from Provided Files ---\n"
+│       │   │   │                   for data in context.on_the_fly_data:
+│       │   │   │                       context_str += f"Content: {data.get('content')}\n\n"
+│       │   │   │       
+│       │   │   │               if context_str:
+│       │   │   │                   final_prompt_text = f"{context_str}Based on the context above, please respond to the following:\n\n{job.prompt_text}"
+│       │   │   │               else:
+│       │   │   │                   final_prompt_text = job.prompt_text
+│       │   │   │                   
+│       │   │   │               context.final_prompt_input = {"input": final_prompt_text}
+│       │   │   │       
+│       │   │   │               # Create the prompt template
+│       │   │   │               messages = [("system", "You are a helpful and intelligent AI assistant.")]
+│       │   │   │               if context.memory:
+│       │   │   │                   messages.append(MessagesPlaceholder(variable_name="chat_history"))
+│       │   │   │               
+│       │   │   │               messages.append(("user", "{input}"))
+│       │   │   │               
+│       │   │   │               if context.tools:
+│       │   │   │                   messages.append(MessagesPlaceholder(variable_name="agent_scratchpad"))
+│       │   │   │       
+│       │   │   │               context.prompt_template = ChatPromptTemplate.from_messages(messages)
+│       │   │   │               logger.info(f"[{job.id}] Prompt assembly complete.")
+│       │   │   │               return context
+│       │   │   │   ]
+│       │   │   │   tool_builder.py
+│       │   │   │   [
+│       │   │   │       # This is the file you requested to be commented out but structured.
+│       │   │   │       # We will create a full, working version that uses the gRPC client.
+│       │   │   │       from .base_builder import BaseBuilder
+│       │   │   │       from app.execution.build_context import BuildContext
+│       │   │   │       from app.logging_config import setup_logging
+│       │   │   │       from app.internals.clients import ToolServiceClient
+│       │   │   │       from langchain_core.tools import tool as langchain_tool
+│       │   │   │       from pydantic import BaseModel, Field
+│       │   │   │       
+│       │   │   │       logger = setup_logging()
+│       │   │   │       
+│       │   │   │       class ToolBuilder(BaseBuilder):
+│       │   │   │           """Creates LangChain-compatible tool objects from definitions."""
+│       │   │   │           def __init__(self):
+│       │   │   │               self.tool_service_client = ToolServiceClient()
+│       │   │   │       
+│       │   │   │           async def build(self, context: BuildContext) -> BuildContext:
+│       │   │   │               if not context.job.tool_definitions:
+│       │   │   │                   logger.info(f"[{context.job.id}] No tools defined. Skipping tool builder.")
+│       │   │   │                   return context
+│       │   │   │               
+│       │   │   │               logger.info(f"[{context.job.id}] Building {len(context.job.tool_definitions)} tools.")
+│       │   │   │               
+│       │   │   │               for definition in context.job.tool_definitions:
+│       │   │   │                   tool_name = definition["name"]
+│       │   │   │                   
+│       │   │   │                   fields = {
+│       │   │   │                       param_name: (str, Field(..., description=schema.get("description")))
+│       │   │   │                       for param_name, schema in definition.get("parameters", {}).get("properties", {}).items()
+│       │   │   │                   }
+│       │   │   │                   
+│       │   │   │                   DynamicArgsSchema = type(f"{tool_name}ArgsSchema", (BaseModel,), fields)
+│       │   │   │       
+│       │   │   │                   # This closure captures the tool_name and the client instance
+│       │   │   │                   async def _execute_tool(**kwargs):
+│       │   │   │                       tool_call = [{"id": "call_1", "name": tool_name, "args": kwargs}]
+│       │   │   │                       logger.info(f"[{context.job.id}] Agent requested to execute tool '{tool_name}' with args: {kwargs}")
+│       │   │   │                       results = await self.tool_service_client.execute_tools(tool_call)
+│       │   │   │                       output = results[0]["output"] if results else f"Error: No result from tool '{tool_name}'."
+│       │   │   │                       logger.info(f"[{context.job.id}] Tool '{tool_name}' returned: {output[:100]}...")
+│       │   │   │                       return output
+│       │   │   │                   
+│       │   │   │                   dynamic_tool = langchain_tool(
+│       │   │   │                       name=tool_name,
+│       │   │   │                       description=definition["description"],
+│       │   │   │                       args_schema=DynamicArgsSchema,
+│       │   │   │                       coroutine=_execute_tool
+│       │   │   │                   )
+│       │   │   │                   context.tools.append(dynamic_tool)
+│       │   │   │       
+│       │   │   │               logger.info(f"[{context.job.id}] Tools built successfully.")
+│       │   │   │               return context
+│       │   │   │   ]
+│       │   │   executor.py
+│       │   │   [
+│       │   │       from langchain.agents import AgentExecutor, create_tool_calling_agent
+│       │   │       from langchain_core.runnables.history import RunnableWithMessageHistory
+│       │   │       from app.logging_config import setup_logging
+│       │   │       from app.execution.build_context import BuildContext
+│       │   │       from app.messaging.publisher import ResultPublisher
+│       │   │       logger = setup_logging()    
+│       │   │       # In-memory store for chat histories. In production, this should be Redis.
+│       │   │       chat_history_store = {}
+│       │   │       
+│       │   │       class Executor:
+│       │   │           """Takes a fully built context and executes the final LangChain runnable."""
+│       │   │           
+│       │   │           def __init__(self, context: BuildContext, publisher: ResultPublisher):
+│       │   │               self.context = context
+│       │   │               self.job = context.job
+│       │   │               self.publisher = publisher
+│       │   │       
+│       │   │           async def run(self):
+│       │   │               logger.info(f"[{self.job.id}] Starting final chain execution.")
+│       │   │       
+│       │   │               # Determine the core runnable: an agent if tools exist, otherwise a simple chain.
+│       │   │               if self.context.tools:
+│       │   │                   agent = create_tool_calling_agent(self.context.llm, self.context.tools, self.context.prompt_template)
+│       │   │                   runnable = AgentExecutor(agent=agent, tools=self.context.tools, verbose=True)
+│       │   │               else:
+│       │   │                   runnable = self.context.prompt_template | self.context.llm
+│       │   │       
+│       │   │               # Wrap the runnable with memory if it was configured.
+│       │   │               if self.context.memory:
+│       │   │                   agent_with_memory = RunnableWithMessageHistory(
+│       │   │                       runnable,
+│       │   │                       # A function that returns the memory object for a given session_id
+│       │   │                       lambda session_id: chat_history_store.setdefault(session_id, self.context.memory),
+│       │   │                       input_messages_key="input",
+│       │   │                       history_messages_key="chat_history",
+│       │   │                   )
+│       │   │                   
+│       │   │                   # The session_id is the memory_bucket_id
+│       │   │                   session_config = {"configurable": {"session_id": self.job.memory_context.get("bucket_id")}}
+│       │   │                   
+│       │   │                   if self.job.is_streaming:
+│       │   │                       final_result = await self._stream_and_publish(agent_with_memory, self.context.final_input, session_config)
+│       │   │                   else:
+│       │   │                       result = await agent_with_memory.ainvoke(self.context.final_input, config=session_config)
+│       │   │                       final_result = result.get('output', result.content if hasattr(result, 'content') else str(result))
+│       │   │                       await self.publisher.publish_final_result(self.job.id, final_result)
+│       │   │               else:
+│       │   │                   # Execute without memory
+│       │   │                   if self.job.is_streaming:
+│       │   │                       final_result = await self._stream_and_publish(runnable, self.context.final_input, None)
+│       │   │                   else:
+│       │   │                       result = await runnable.ainvoke(self.context.final_input)
+│       │   │                       final_result = result.content if hasattr(result, 'content') else str(result)
+│       │   │                       await self.publisher.publish_final_result(self.job.id, final_result)
+│       │   │               
+│       │   │               # Trigger feedback loops after successful execution
+│       │   │               await self.publisher.publish_memory_update(self.job, final_result)
+│       │   │       
+│       │   │           async def _stream_and_publish(self, chain, input_data, config) -> str:
+│       │   │               """Handles streaming the output and publishing chunks."""
+│       │   │               final_result = ""
+│       │   │               logger.info(f"[{self.job.id}] Executing in streaming mode.")
+│       │   │               async for chunk in chain.astream(input_data, config=config):
+│       │   │                   # AgentExecutor returns dicts, simple chains return AIMessage chunks
+│       │   │                   output_chunk = chunk.get('output', chunk.content if hasattr(chunk, 'content') else '')
+│       │   │                   if output_chunk:
+│       │   │                       await self.publisher.publish_stream_chunk(self.job.id, output_chunk)
+│       │   │                       final_result += output_chunk
+│       │   │               await self.publisher.publish_final_result(self.job.id, final_result) # Publish a final success message
+│       │   │               return final_result
+│       │   │   ]
+│       │   │   job.py
+│       │   │   [
+│       │   │       import uuid
+│       │   │       
+│       │   │       class Job:
+│       │   │           """A data class providing a clean, validated interface to the raw job payload."""
+│       │   │           def __init__(self, payload: dict):
+│       │   │               if not isinstance(payload, dict):
+│       │   │                   raise TypeError("Job payload must be a dictionary.")
+│       │   │               
+│       │   │               self.id = payload.get("job_id", str(uuid.uuid4()))
+│       │   │               self.user_id = payload.get("user_id")
+│       │   │       
+│       │   │               self.query = payload.get("query", {})
+│       │   │               self.prompt_text = self.query.get("prompt", "")
+│       │   │               self.inputs = self.query.get("inputs", [])
+│       │   │               
+│       │   │               self.default_params = payload.get("default_parameters", {})
+│       │   │               self.param_overrides = self.query.get("parameter_overrides", {})
+│       │   │               
+│       │   │               self.output_config = self.query.get("output_config", {})
+│       │   │               self.is_streaming = self.output_config.get("mode") == "streaming"
+│       │   │       
+│       │   │               self.resources = payload.get("resources") or {}
+│       │   │               self.model_config = self.resources.get("model_config", {})
+│       │   │               self.tool_definitions = self.resources.get("tools") # Can be None
+│       │   │               self.rag_docs = self.resources.get("rag_context", {}).get("documents", [])
+│       │   │               self.memory_context = self.resources.get("memory_context", {})
+│       │   │           
+│       │   │           @property
+│       │   │           def feedback_ids(self):
+│       │   │               return {
+│       │   │                   "memory_bucket_id": self.memory_context.get("bucket_id"),
+│       │   │                   "rag_collection_id": self.resources.get("rag_context", {}).get("collection_id")
+│       │   │               }
+│       │   │   ]
+│       │   │   pipeline.py
+│       │   │   [
+│       │   │       from app.execution.build_context import BuildContext
+│       │   │       from app.execution.builders.data_builder import DataBuilder
+│       │   │       from app.execution.builders.model_builder import ModelBuilder
+│       │   │       from app.execution.builders.memory_builder import MemoryBuilder
+│       │   │       from app.execution.builders.tool_builder import ToolBuilder
+│       │   │       from app.execution.builders.prompt_builder import PromptBuilder
+│       │   │       
+│       │   │       class ChainConstructionPipeline:
+│       │   │           """Orchestrates the step-by-step construction of a runnable LangChain chain."""
+│       │   │           def __init__(self, context: BuildContext):
+│       │   │               self.context = context
+│       │   │               # The order of builders is critical
+│       │   │               self.pipeline = [
+│       │   │                   DataBuilder(),
+│       │   │                   ModelBuilder(),
+│       │   │                   MemoryBuilder(),
+│       │   │                   ToolBuilder(), # Now included
+│       │   │                   PromptBuilder(),
+│       │   │               ]
+│       │   │       
+│       │   │           async def run(self) -> BuildContext:
+│       │   │               for builder in self.pipeline:
+│       │   │                   self.context = await builder.build(self.context)
+│       │   │               return self.context
+│       │   │   ]
+│       │   ├───internals
+│       │   │   __init__.py
+│       │   │   [
+│       │   │       
+│       │   │   ]
+│       │   │   clients.py
+│       │   │   [
+│       │   │       # gRPC and HTTP clients
+│       │   │       import grpc
+│       │   │       import httpx
+│       │   │       import asyncio
+│       │   │       import json
+│       │   │       from app import config
+│       │   │       #from app.internals.generated import tool_pb2, tool_pb2_grpc
+│       │   │       from google.protobuf.json_format import MessageToDict
+│       │   │       from google.protobuf.struct_pb2 import Struct
+│       │   │       from app.logging_config import logging
+│       │   │       
+│       │   │       logger = logging.getLogger(__name__)
+│       │   │       
+│       │   │       class ToolServiceClient:
+│       │   │           """A client for interacting with the gRPC Tool Service."""
+│       │   │           
+│       │   │           async def execute_tools(self, tool_calls: list[dict]) -> list[dict]:
+│       │   │               """
+│       │   │               Executes one or more tools in parallel by calling the Tool Service.
+│       │   │               """
+│       │   │               try:
+│       │   │                   async with grpc.aio.insecure_channel(config.TOOL_SERVICE_GRPC_URL) as channel:
+│       │   │                       #stub = tool_pb2_grpc.ToolServiceStub(channel)
+│       │   │                       
+│       │   │                       proto_tool_calls = []
+│       │   │                       for call in tool_calls:
+│       │   │                           arguments = Struct()
+│       │   │                           # LangChain can sometimes pass stringified JSON, so we handle both dicts and strings.
+│       │   │                           args_data = call.get("args", {})
+│       │   │                           if isinstance(args_data, str):
+│       │   │                               try:
+│       │   │                                   args_data = json.loads(args_data)
+│       │   │                               except json.JSONDecodeError:
+│       │   │                                   logger.warning(f"Could not decode string arguments for tool {call.get('name')}: {args_data}")
+│       │   │                                   args_data = {}
+│       │   │                           
+│       │   │                           if isinstance(args_data, dict):
+│       │   │                               arguments.update(args_data)
+│       │   │       
+│       │   │                           #proto_tool_calls.append(tool_pb2.ToolCall(
+│       │   │                           #    id=call.get("id"),
+│       │   │                           #    name=call.get("name"),
+│       │   │                           #    arguments=arguments
+│       │   │                           #))
+│       │   │       
+│       │   │                       #request = tool_pb2.ExecuteMultipleToolsRequest(tool_calls=proto_tool_calls)
+│       │   │                       #response = await stub.ExecuteMultipleTools(request, timeout=30.0)
+│       │   │                       
+│       │   │                       return [
+│       │   │                           #{
+│       │   │                           #    "tool_call_id": res.tool_call_id,
+│       │   │                           #    "name": res.name,
+│       │   │                           #    "status": res.status,
+│       │   │                           #    "output": res.output
+│       │   │                           #}
+│       │   │                           #for res in response.results
+│       │   │                       ]
+│       │   │               except grpc.aio.AioRpcError as e:
+│       │   │                   logger.error(f"gRPC error executing tools: {e.details()}")
+│       │   │                   # Return an error structure that the agent can understand
+│       │   │                   return [
+│       │   │                       {
+│       │   │                           "tool_call_id": call.get("id"),
+│       │   │                           "name": call.get("name"),
+│       │   │                           "status": "error",
+│       │   │                           "output": f"Error calling tool service: {e.details()}"
+│       │   │                       } for call in tool_calls
+│       │   │                   ]
+│       │   │       
+│       │   │       class DataServiceClient:
+│       │   │           """
+│       │   │           A client for fetching the content of on-the-fly files from a data service.
+│       │   │           This is a placeholder and should be adapted to your actual Data Service (MS-Data/RAG).
+│       │   │           """
+│       │   │           
+│       │   │           async def get_file_content(self, file_id: str) -> dict:
+│       │   │               """
+│       │   │               Fetches and parses a file's content.
+│       │   │               """
+│       │   │               logger.info(f"Fetching content for file_id: {file_id}")
+│       │   │               if not config.DATA_SERVICE_URL:
+│       │   │                   logger.warning("DATA_SERVICE_URL not set. Returning mock data.")
+│       │   │                   await asyncio.sleep(0.1) # Simulate network call
+│       │   │                   return {
+│       │   │                       "source_id": file_id,
+│       │   │                       "type": "text_content",
+│       │   │                       "content": f"This is the mock parsed text content of file {file_id}."
+│       │   │                   }
+│       │   │                   
+│       │   │               try:
+│       │   │                   async with httpx.AsyncClient(timeout=30.0) as client:
+│       │   │                       # This assumes your Data service has an internal endpoint like this
+│       │   │                       response = await client.get(f"{config.DATA_SERVICE_URL}/internal/v1/files/{file_id}/content")
+│       │   │                       response.raise_for_status()
+│       │   │                       return response.json()
+│       │   │               except httpx.RequestError as e:
+│       │   │                   logger.error(f"Could not connect to Data Service to fetch file {file_id}: {e}")
+│       │   │                   return {"source_id": file_id, "type": "error", "content": "Could not connect to Data Service."}
+│       │   │               except httpx.HTTPStatusError as e:
+│       │   │                   logger.error(f"Data Service returned an error for file {file_id}: {e.response.status_code} {e.response.text}")
+│       │   │                   return {"source_id": file_id, "type": "error", "content": f"Error from Data Service: {e.response.status_code}"}
+│       │   │   ]
+│       │   │   ├───generated
+│       │   │   │   __init__.py
+│       │   │   │   [
+│       │   │   │       
+│       │   │   │   ]
+│       │   │   └───protos
+│       │   │       tool.proto
+│       │   │       [
+│       │   │           # (For future tool builder)
+│       │   │           
+│       │   │       ]
+│       │   logging_config.py
+│       │   [
+│       │       import logging
+│       │       import sys
+│       │       
+│       │       def setup_logging():
+│       │           logging.basicConfig(
+│       │               level=logging.INFO,
+│       │               format="%(asctime)s - MS6-Executor - [%(levelname)s] - %(name)s - %(message)s",
+│       │               stream=sys.stdout,
+│       │           )
+│       │           logging.getLogger("aio_pika").setLevel(logging.WARNING)
+│       │           logging.getLogger("aiormq").setLevel(logging.WARNING)
+│       │   ]
+│       │   └───messaging
+│       │       __init__.py
+│       │       [
+│       │           
+│       │       ]
+│       │       publisher.py
+│       │       [
+│       │           # MS6/app/messaging/publisher.py
+│       │           
+│       │           from app.logging_config import setup_logging
+│       │           from .rabbitmq_client import rabbitmq_client # <-- Imports the client from the other file
+│       │           
+│       │           logger = setup_logging()
+│       │           
+│       │           class ResultPublisher:
+│       │               """
+│       │               Handles publishing all outgoing messages from the executor by using the
+│       │               thread-safe RabbitMQ client.
+│       │               """
+│       │               def _publish(self, exchange_name, routing_key, body):
+│       │                   try:
+│       │                       rabbitmq_client.publish(exchange_name, routing_key, body)
+│       │                   except Exception as e:
+│       │                       logger.error(f"FINAL ATTEMPT FAILED to publish to exchange '{exchange_name}': {e}", exc_info=True)
+│       │           
+│       │               def publish_stream_chunk(self, job_id, chunk_content):
+│       │                   self._publish(
+│       │                       "results_exchange", 
+│       │                       f"inference.result.streaming.{job_id}",
+│       │                       {"job_id": job_id, "type": "chunk", "content": chunk_content}
+│       │                   )
+│       │               
+│       │               def publish_final_result(self, job_id, result_content):
+│       │                   self._publish(
+│       │                       "results_exchange", 
+│       │                       "inference.result.final", 
+│       │                       {"job_id": job_id, "status": "success", "content": result_content}
+│       │                   )
+│       │           
+│       │               def publish_error_result(self, job_id, error_message):
+│       │                   self._publish(
+│       │                       "results_exchange", 
+│       │                       "inference.result.error", 
+│       │                       {"job_id": job_id, "status": "error", "error": error_message}
+│       │                   )
+│       │           
+│       │               def publish_memory_update(self, job, final_result: str):
+│       │                   memory_ids = job.feedback_ids
+│       │                   bucket_id = memory_ids.get("memory_bucket_id")
+│       │                   
+│       │                   if not bucket_id:
+│       │                       return
+│       │                       
+│       │                   user_message = {"role": "user", "content": [{"type": "text", "text": job.prompt_text}]}
+│       │                   for inp in job.inputs:
+│       │                       if inp.get('type') == 'file_id':
+│       │                           user_message['content'].append({"type": "file_ref", "file_id": inp.get('id')})
+│       │                       elif inp.get('type') == 'image_url':
+│       │                           user_message['content'].append({"type": "image_ref", "url": inp.get('url')})
+│       │           
+│       │                   assistant_message = {
+│       │                       "role": "assistant",
+│       │                       "content": [{"type": "text", "text": final_result}]
+│       │                   }
+│       │                   
+│       │                   update_payload = {
+│       │                       "memory_bucket_id": bucket_id,
+│       │                       "messages_to_add": [user_message, assistant_message]
+│       │                   }
+│       │                   self._publish("memory_exchange", "memory.context.update", update_payload)
+│       │       ]
+│       │       rabbitmq_client.py
+│       │       [
+│       │           # MS6/app/messaging/rabbitmq_client.py
+│       │           
+│       │           import pika
+│       │           import json
+│       │           import threading
+│       │           import time
+│       │           from app import config
+│       │           from app.logging_config import setup_logging
+│       │           
+│       │           logger = setup_logging()
+│       │           
+│       │           class ThreadSafeRabbitMQClient:
+│       │               """
+│       │               A robust, thread-safe RabbitMQ client that manages connections on a per-thread
+│       │               basis. This is essential because the executor will process each job in a new thread,
+│       │               and each thread needs its own connection to RabbitMQ to publish results.
+│       │               """
+│       │               _thread_local = threading.local()
+│       │           
+│       │               def __init__(self, max_retries=3, retry_delay=2):
+│       │                   self.max_retries = max_retries
+│       │                   self.retry_delay = retry_delay
+│       │           
+│       │               def _get_connection(self):
+│       │                   """Gets or creates a dedicated connection for the current thread."""
+│       │                   if not hasattr(self._thread_local, 'connection') or self._thread_local.connection.is_closed:
+│       │                       logger.info(f"Thread {threading.get_ident()}: No active publisher connection. Creating new one...")
+│       │                       params = pika.URLParameters(config.RABBITMQ_URL)
+│       │                       self._thread_local.connection = pika.BlockingConnection(params)
+│       │                       logger.info(f"Thread {threading.get_ident()}: Publisher connection successful.")
+│       │                   return self._thread_local.connection
+│       │           
+│       │               def _invalidate_connection(self):
+│       │                   """Forcefully closes the connection for the current thread."""
+│       │                   if hasattr(self._thread_local, 'connection') and self._thread_local.connection.is_open:
+│       │                       self._thread_local.connection.close()
+│       │                   if hasattr(self._thread_local, 'connection'):
+│       │                       del self._thread_local.connection
+│       │                   logger.warning(f"Thread {threading.get_ident()}: Invalidated publisher connection.")
+│       │           
+│       │               def publish(self, exchange_name, routing_key, body):
+│       │                   """Publishes a message with a built-in retry mechanism."""
+│       │                   attempt = 0
+│       │                   while attempt < self.max_retries:
+│       │                       try:
+│       │                           connection = self._get_connection()
+│       │                           with connection.channel() as channel:
+│       │                               channel.exchange_declare(exchange=exchange_name, exchange_type='topic', durable=True)
+│       │                               message_body = json.dumps(body, default=str).encode('utf-8')
+│       │                               channel.basic_publish(
+│       │                                   exchange=exchange_name,
+│       │                                   routing_key=routing_key,
+│       │                                   body=message_body,
+│       │                                   properties=pika.BasicProperties(
+│       │                                       content_type='application/json',
+│       │                                       delivery_mode=pika.DeliveryMode.PERSISTENT,
+│       │                                   )
+│       │                               )
+│       │                               logger.info(f" [x] Sent to '{routing_key}': '{message_body.decode()[:150]}...' on attempt {attempt + 1}")
+│       │                               return
+│       │                       except (pika.exceptions.AMQPError, OSError) as e:
+│       │                           logger.warning(f"Publish attempt {attempt + 1} failed: {e}. Invalidating connection and retrying...")
+│       │                           self._invalidate_connection()
+│       │                           attempt += 1
+│       │                           if attempt < self.max_retries:
+│       │                               time.sleep(self.retry_delay)
+│       │                           else:
+│       │                               logger.critical(f"Failed to publish message to '{routing_key}' after {self.max_retries} attempts.")
+│       │                               raise
+│       │           
+│       │           # Create a single, globally accessible instance of the client.
+│       │           rabbitmq_client = ThreadSafeRabbitMQClient()
+│       │       ]
+│       │       worker.py
+│       │       [
+│       │           import pika
+│       │           import json
+│       │           import time
+│       │           import threading
+│       │           from app import config
+│       │           from app.logging_config import setup_logging
+│       │           from app.execution.job import Job
+│       │           from app.execution.pipeline import ChainConstructionPipeline
+│       │           from app.execution.executor import Executor
+│       │           from app.messaging.publisher import ResultPublisher
+│       │           from app.execution.build_context import BuildContext
+│       │           setup_logging()
+│       │           import logging
+│       │           logger = logging.getLogger("MS6-Executor")
+│       │           
+│       │           class RabbitMQWorker:
+│       │               """
+│       │               Manages a robust, blocking connection to RabbitMQ to consume inference jobs.
+│       │               This runs in its own thread.
+│       │               """
+│       │               def __init__(self):
+│       │                   self.connection = None
+│       │                   self.channel = None
+│       │                   self.result_publisher = None
+│       │           
+│       │               def _connect(self):
+│       │                   """Establishes a connection to RabbitMQ."""
+│       │                   logger.info("Attempting to connect to RabbitMQ...")
+│       │                   params = pika.URLParameters(config.RABBITMQ_URL)
+│       │                   self.connection = pika.BlockingConnection(params)
+│       │                   self.channel = self.connection.channel()
+│       │                   
+│       │                   # Initialize the thread-safe publisher for sending results
+│       │                   self.result_publisher = ResultPublisher()
+│       │           
+│       │                   exchange_name = 'inference_exchange'
+│       │                   self.channel.exchange_declare(exchange=exchange_name, exchange_type='topic', durable=True)
+│       │                   
+│       │                   queue_name = 'inference_jobs_queue'
+│       │                   self.channel.queue_declare(queue=queue_name, durable=True)
+│       │                   self.channel.queue_bind(exchange=exchange_name, queue=queue_name, routing_key='inference.job.start')
+│       │                   
+│       │                   self.channel.basic_qos(prefetch_count=1)
+│       │                   self.channel.basic_consume(queue=queue_name, on_message_callback=self._on_message)
+│       │                   
+│       │                   logger.info("Successfully connected to RabbitMQ and set up consumer.")
+│       │           
+│       │               def _on_message(self, channel, method_frame, header_properties, body):
+│       │                   """Callback executed for each message received."""
+│       │                   job_id = "unknown"
+│       │                   try:
+│       │                       payload = json.loads(body.decode())
+│       │                       job = Job(payload)
+│       │                       job_id = job.id
+│       │                       logger.info(f"[{job_id}] Received new job. Starting processing in a new thread.")
+│       │                       
+│       │                       # --- EXECUTE JOB IN A SEPARATE THREAD ---
+│       │                       # This prevents a long-running AI job from blocking the RabbitMQ connection heartbeat.
+│       │                       processing_thread = threading.Thread(
+│       │                           target=self.process_job,
+│       │                           args=(job,)
+│       │                       )
+│       │                       processing_thread.start()
+│       │                       
+│       │                   except json.JSONDecodeError:
+│       │                       logger.error(f"Message body is not valid JSON: {body.decode()[:200]}...")
+│       │                       self.result_publisher.publish_error_result(job_id, "Invalid job format received.")
+│       │                   except Exception:
+│       │                       logger.error(f"[{job_id}] A critical error occurred before job processing could start.", exc_info=True)
+│       │                       self.result_publisher.publish_error_result(job_id, "An unexpected internal worker error occurred.")
+│       │                   
+│       │                   # Acknowledge the message now that the job has been handed off
+│       │                   channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+│       │           
+│       │               def process_job(self, job: Job):
+│       │                   """
+│       │                   The target function for the processing thread. This is where the real work happens.
+│       │                   """
+│       │                   try:
+│       │                       # The Executor now needs to be run with asyncio
+│       │                       import asyncio
+│       │                       asyncio.run(self._run_async_executor(job))
+│       │                   except Exception:
+│       │                       logger.error(f"[{job.id}] Unhandled exception in async job processor.", exc_info=True)
+│       │                       self.result_publisher.publish_error_result(job.id, "A fatal error occurred during async execution.")
+│       │               
+│       │               async def _run_async_executor(self, job: Job):
+│       │                   """Helper to run the async executor logic from a sync thread."""
+│       │                   logger.info(f"[{job.id}] Async execution started.")
+│       │                   build_context = BuildContext(job)
+│       │                   pipeline = ChainConstructionPipeline(build_context)
+│       │                   final_context = await pipeline.run()
+│       │                   executor = Executor(final_context, self.result_publisher)
+│       │                   await executor.run()
+│       │                   logger.info(f"[{job.id}] Async execution finished.")
+│       │           
+│       │           
+│       │               def run(self):
+│       │                   """Starts the worker and enters a reconnect loop."""
+│       │                   while True:
+│       │                       try:
+│       │                           self._connect()
+│       │                           logger.info(" [*] Inference Executor Worker is waiting for jobs. To exit press CTRL+C")
+│       │                           self.channel.start_consuming()
+│       │                       except KeyboardInterrupt:
+│       │                           logger.info("Worker shutting down gracefully.")
+│       │                           if self.connection and self.connection.is_open:
+│       │                               self.connection.close()
+│       │                           break
+│       │                       except pika.exceptions.AMQPConnectionError as e:
+│       │                           logger.error(f"RabbitMQ connection lost: {e}. Reconnecting in 5 seconds...")
+│       │                           time.sleep(5)
+│       │       ]
+│       │   generate_protos.py
+│       │   [
+│       │       import os
+│       │       import subprocess
+│       │       import fileinput
+│       │       import sys
+│       │       from pathlib import Path
+│       │       
+│       │       def main():
+│       │           """Generates and fixes gRPC stubs for the executor."""
+│       │           root_dir = Path(__file__).parent
+│       │           proto_path = root_dir / 'app' / 'internals' / 'protos'
+│       │           output_path = root_dir / 'app' / 'internals' / 'generated'
+│       │           
+│       │           print(f"Project root directory: {root_dir}")
+│       │           print(f"Proto source directory: {proto_path}")
+│       │           print(f"Generated code output directory: {output_path}")
+│       │       
+│       │           if not proto_path.is_dir():
+│       │               print(f"ERROR: Proto path '{proto_path}' does not exist.", file=sys.stderr)
+│       │               sys.exit(1)
+│       │       
+│       │           output_path.mkdir(parents=True, exist_ok=True)
+│       │           (output_path / '__init__.py').touch()
+│       │       
+│       │           proto_files = [f for f in proto_path.iterdir() if f.suffix == '.proto']
+│       │           if not proto_files:
+│       │               print('No .proto files found. Exiting.')
+│       │               return
+│       │               
+│       │           command = [
+│       │               sys.executable,  # Use the same python interpreter running the script
+│       │               '-m',
+│       │               'grpc_tools.protoc',
+│       │               f'--proto_path={proto_path}',
+│       │               f'--python_out={output_path}',
+│       │               f'--grpc_python_out={output_path}',
+│       │           ] + [str(pf) for pf in proto_files]
+│       │       
+│       │           print(f"Running command: {' '.join(command)}")
+│       │           try:
+│       │               subprocess.run(command, check=True, capture_output=True, text=True)
+│       │           except subprocess.CalledProcessError as e:
+│       │               print("ERROR: Failed to generate gRPC stubs.", file=sys.stderr)
+│       │               print(e.stderr, file=sys.stderr)
+│       │               sys.exit(1)
+│       │       
+│       │           print('Successfully generated gRPC stubs. Now fixing imports...')
+│       │           for proto_file in proto_files:
+│       │               base_name = proto_file.stem
+│       │               grpc_file_path = output_path / f'{base_name}_pb2_grpc.py'
+│       │               
+│       │               with fileinput.FileInput(str(grpc_file_path), inplace=True) as file:
+│       │                   for line in file:
+│       │                       if line.strip() == f'import {base_name}_pb2 as {base_name}__pb2':
+│       │                           print(f'from . import {base_name}_pb2 as {base_name}__pb2', end='\n')
+│       │                       else:
+│       │                           print(line, end='')
+│       │       
+│       │           print('Imports fixed successfully.')
+│       │       
+│       │       if __name__ == '__main__':
+│       │           main()
+│       │   ]
+│       │   main.py
+│       │   [
+│       │       import asyncio
+│       │       from app.config import *
+│       │       from app.logging_config import setup_logging
+│       │       from app.messaging.worker import RabbitMQWorker
+│       │       import logging
+│       │       
+│       │       async def main():
+│       │           """Asynchronous entry point for the application."""
+│       │           setup_logging()
+│       │           logger = logging.getLogger("MS6-Executor")
+│       │           worker = RabbitMQWorker()
+│       │           try:
+│       │               logger.info("Starting Inference Executor Worker...")
+│       │               await worker.run()
+│       │           except KeyboardInterrupt:
+│       │               logger.info("Executor shutting down gracefully due to user request (CTRL+C).")
+│       │           except Exception as e:
+│       │               logger.critical(f"FATAL: Worker crashed during startup: {e}", exc_info=True)
+│       │       
+│       │       if __name__ == "__main__":
+│       │           asyncio.run(main())
+│       │   ]
+│       │   project meta gen.py
+│       │   [
+│       │       import os
+│       │       import mimetypes
+│       │       import glob
+│       │       import re
+│       │       
+│       │       def get_next_sequence_number():
+│       │           """Find the next available sequence number for the output file."""
+│       │           script_dir = os.path.abspath(os.path.dirname(__file__))
+│       │           pattern = os.path.join(script_dir, "project_structure_*.txt")
+│       │           existing_files = glob.glob(pattern)
+│       │           
+│       │           if not existing_files:
+│       │               return 1
+│       │           
+│       │           # Extract sequence numbers from existing files
+│       │           sequence_numbers = []
+│       │           for file_path in existing_files:
+│       │               basename = os.path.basename(file_path)
+│       │               match = re.search(r'project_structure_(\d+)\.txt', basename)
+│       │               if match:
+│       │                   sequence_numbers.append(int(match.group(1)))
+│       │           
+│       │           if not sequence_numbers:
+│       │               return 1
+│       │           
+│       │           # Return the next number in sequence
+│       │           return max(sequence_numbers) + 1
+│       │       
+│       │       def generate_project_structure():
+│       │           """Generate a text file containing the project structure with file contents."""
+│       │           # Get the absolute path of the script's directory
+│       │           script_dir = os.path.abspath(os.path.dirname(__file__))
+│       │           # Change to that directory to ensure we're working only there
+│       │           os.chdir(script_dir)
+│       │           
+│       │           # Generate a unique filename with sequence number
+│       │           seq_num = get_next_sequence_number()
+│       │           output_file = os.path.join(script_dir, f"project_structure_{seq_num}.txt")
+│       │           
+│       │           with open(output_file, 'w', encoding='utf-8', errors='replace') as f:
+│       │               # Get items in the script directory only, excluding specified patterns
+│       │               items = get_directory_items(script_dir, output_file)
+│       │               
+│       │               # Process each item at root level
+│       │               for i, item in enumerate(items):
+│       │                   is_last = i == len(items) - 1
+│       │                   
+│       │                   if os.path.isdir(os.path.join(script_dir, item)):
+│       │                       # It's a directory
+│       │                       if is_last:
+│       │                           f.write(f"└───{item}\n")
+│       │                           process_directory(os.path.join(script_dir, item), f, "    ", output_file, script_dir)
+│       │                       else:
+│       │                           f.write(f"├───{item}\n")
+│       │                           process_directory(os.path.join(script_dir, item), f, "│   ", output_file, script_dir)
+│       │                   else:
+│       │                       # It's a file - at root level, format as in the example
+│       │                       f.write(f"│   {item}\n")
+│       │                       # Include file content
+│       │                       content = read_file_content(os.path.join(script_dir, item))
+│       │                       f.write(f"│   [\n")
+│       │                       content_lines = content.split('\n')
+│       │                       for line in content_lines:
+│       │                           f.write(f"│       {line}\n")
+│       │                       f.write(f"│   ]\n")
+│       │           
+│       │           print(f"Project structure has been written to {output_file}")
+│       │       
+│       │       def should_exclude(item_path):
+│       │           """Check if an item should be excluded based on patterns."""
+│       │           # Exclude __pycache__ directories
+│       │           if os.path.isdir(item_path) and "__pycache__" in item_path:
+│       │               return True
+│       │           
+│       │           # Exclude migrations directories
+│       │           if os.path.isdir(item_path) and "migrations" in item_path:
+│       │               return True
+│       │           
+│       │           # Exclude .pyc files
+│       │           if item_path.endswith('.pyc'):
+│       │               return True
+│       │           
+│       │           # Exclude all project_structure files
+│       │           if os.path.basename(item_path).startswith("project_structure_") and item_path.endswith(".txt"):
+│       │               return True
+│       │           
+│       │           return False
+│       │       
+│       │       def get_directory_items(dir_path, output_file):
+│       │           """Get sorted list of items in a directory, excluding the output file and specified patterns."""
+│       │           # Get absolute path to output file to exclude it
+│       │           abs_output_path = os.path.abspath(output_file)
+│       │           
+│       │           try:
+│       │               # List directory contents
+│       │               items = sorted(os.listdir(dir_path))
+│       │               
+│       │               # Filter out the output file itself and items matching exclude patterns
+│       │               filtered_items = []
+│       │               for item in items:
+│       │                   item_path = os.path.join(dir_path, item)
+│       │                   
+│       │                   # Skip the output file
+│       │                   if os.path.abspath(item_path) == abs_output_path:
+│       │                       continue
+│       │                       
+│       │                   # Skip symlinks that might point outside
+│       │                   if os.path.islink(item_path):
+│       │                       continue
+│       │                       
+│       │                   # Skip items matching exclude patterns
+│       │                   if should_exclude(item_path):
+│       │                       continue
+│       │                       
+│       │                   filtered_items.append(item)
+│       │               
+│       │               return filtered_items
+│       │           except Exception as e:
+│       │               print(f"Error listing directory {dir_path}: {e}")
+│       │               return []
+│       │       
+│       │       def is_binary_file(file_path):
+│       │           """Determine if a file is binary or text."""
+│       │           # Initialize mimetypes
+│       │           if not mimetypes.inited:
+│       │               mimetypes.init()
+│       │           
+│       │           # Check by mime type first
+│       │           mime_type, _ = mimetypes.guess_type(file_path)
+│       │           if mime_type and not mime_type.startswith(('text/', 'application/json', 'application/xml', 'application/javascript')):
+│       │               return True
+│       │               
+│       │           # Fallback: check for null bytes
+│       │           try:
+│       │               with open(file_path, 'rb') as f:
+│       │                   chunk = f.read(4096)
+│       │                   return b'\0' in chunk
+│       │           except Exception:
+│       │               return True  # If we can't read it, assume binary
+│       │       
+│       │       def read_file_content(file_path, max_length=500000):
+│       │           """Read content from a file, handling binary files and errors."""
+│       │           try:
+│       │               # Check if binary
+│       │               if is_binary_file(file_path):
+│       │                   return "[Binary file - content not shown]"
+│       │                   
+│       │               # Read text file
+│       │               with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+│       │                   content = f.read(max_length + 1)
+│       │                   
+│       │               # Handle truncation
+│       │               if len(content) > max_length:
+│       │                   content = content[:max_length] + "... [truncated]"
+│       │                   
+│       │               # Return raw content without escaping special characters
+│       │               return content
+│       │           except Exception as e:
+│       │               return f"[Error reading file: {str(e)}]"
+│       │       
+│       │       def process_directory(dir_path, file_obj, indent, output_file, script_dir):
+│       │           """Recursively process a directory and write its structure to the file."""
+│       │           # Safety check - ensure we're still within the script directory
+│       │           rel_path = os.path.relpath(dir_path, script_dir)
+│       │           if rel_path.startswith('..') or rel_path == '.':
+│       │               return  # Don't process if it's outside our script directory
+│       │           
+│       │           try:
+│       │               # List directory contents
+│       │               items = get_directory_items(dir_path, output_file)
+│       │               
+│       │               # Process each item
+│       │               for i, item in enumerate(items):
+│       │                   item_path = os.path.join(dir_path, item)
+│       │                   is_last = i == len(items) - 1
+│       │                   
+│       │                   # Safety check - don't follow symlinks or items outside our script directory
+│       │                   if os.path.islink(item_path):
+│       │                       continue
+│       │                       
+│       │                   rel_path = os.path.relpath(item_path, script_dir)
+│       │                   if rel_path.startswith('..'):
+│       │                       continue
+│       │                   
+│       │                   if os.path.isdir(item_path):
+│       │                       # It's a directory
+│       │                       if is_last:
+│       │                           file_obj.write(f"{indent}└───{item}\n")
+│       │                           process_directory(item_path, file_obj, indent + "    ", output_file, script_dir)
+│       │                       else:
+│       │                           file_obj.write(f"{indent}├───{item}\n")
+│       │                           process_directory(item_path, file_obj, indent + "│   ", output_file, script_dir)
+│       │                   else:
+│       │                       # It's a file
+│       │                       file_obj.write(f"{indent}{item}\n")
+│       │                       # Include file content
+│       │                       content = read_file_content(item_path)
+│       │                       file_obj.write(f"{indent}[\n")
+│       │                       content_lines = content.split('\n')
+│       │                       for line in content_lines:
+│       │                           file_obj.write(f"{indent}    {line}\n")
+│       │                       file_obj.write(f"{indent}]\n")
+│       │           except PermissionError:
+│       │               file_obj.write(f"{indent}[Permission denied]\n")
+│       │           except Exception as e:
+│       │               file_obj.write(f"{indent}[Error: {str(e)}]\n")
+│       │       
+│       │       if __name__ == "__main__":
+│       │           generate_project_structure()
+│       │   ]
+│       │   requirements.txt
+│       │   [
+│       │       aio-pika
+│       │       grpcio
+│       │       grpcio-tools
+│       │       protobuf
+│       │       google-api-python-client
+│       │       python-dotenv
+│       │       httpx
+│       │       pydantic
+│       │       langchain
+│       │       langchain-core
+│       │       langchain-openai
+│       │       langchain-anthropic
+│       │       langchain-google-genai
+│       │       langchain-community
+│       │       pika
+│       │   ]
+│       
+│   ]
+├───app
+│   __init__.py
+│   [
+│       
+│   ]
+│   config.py
+│   [
+│       import os
+│       from dotenv import load_dotenv
+│       
+│       load_dotenv()
+│       
+│       RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
+│       TOOL_SERVICE_GRPC_URL = os.getenv("TOOL_SERVICE_GRPC_URL")
+│       DATA_SERVICE_GRPC_URL = os.getenv("DATA_SERVICE_GRPC_URL")
+│   ]
+│   ├───execution
+│   │   __init__.py
+│   │   [
+│   │       
+│   │   ]
+│   │   build_context.py
+│   │   [
+│   │       from dataclasses import dataclass, field
+│   │       from langchain_core.language_models import BaseChatModel
+│   │       from langchain_core.memory import BaseMemory
+│   │       from langchain_core.tools import BaseTool
+│   │       from langchain_core.prompts import ChatPromptTemplate
+│   │       from app.execution.job import Job
+│   │       
+│   │       @dataclass
+│   │       class BuildContext:
+│   │           """Holds the state of the chain construction process. Each builder populates a field."""
+│   │           job: Job
+│   │           llm: BaseChatModel = None
+│   │           memory: BaseMemory = None
+│   │           tools: list[BaseTool] = field(default_factory=list)
+│   │           prompt_template: ChatPromptTemplate = None
+│   │           on_the_fly_data: list[dict] = field(default_factory=list)
+│   │           final_input: dict = field(default_factory=dict)
+│   │   ]
+│   │   ├───builders
+│   │   │   __init__.py
+│   │   │   [
+│   │   │       
+│   │   │   ]
+│   │   │   base_builder.py
+│   │   │   [
+│   │   │       # Abstract base class for all builders
+│   │   │       from abc import ABC, abstractmethod
+│   │   │       from app.execution.build_context import BuildContext
+│   │   │       
+│   │   │       class BaseBuilder(ABC):
+│   │   │           """Abstract base class for all components in the chain construction pipeline."""
+│   │   │           
+│   │   │           @abstractmethod
+│   │   │           async def build(self, context: BuildContext) -> BuildContext:
+│   │   │               """
+│   │   │               Processes the input context, adds its component, and returns the modified context.
+│   │   │               """
+│   │   │               pass
+│   │   │   ]
+│   │   │   data_builder.py
+│   │   │   [
+│   │   │       # MS6/app/execution/builders/data_builder.py
+│   │   │       
+│   │   │       from .base_builder import BaseBuilder
+│   │   │       from app.execution.build_context import BuildContext
+│   │   │       from app.internals.clients import DataServiceClient # <-- Import the new gRPC client
+│   │   │       from app.logging_config import logger
+│   │   │       import asyncio
+│   │   │       
+│   │   │       class DataBuilder(BaseBuilder):
+│   │   │           """
+│   │   │           Fetches and prepares on-the-fly data (e.g., user-uploaded files) for the prompt.
+│   │   │           This now uses a gRPC client to call the Data Service (MS10).
+│   │   │           """
+│   │   │           def __init__(self):
+│   │   │               self.data_client = DataServiceClient()
+│   │   │       
+│   │   │           async def build(self, context: BuildContext) -> BuildContext:
+│   │   │               if not context.job.inputs:
+│   │   │                   return context
+│   │   │       
+│   │   │               logger.info(f"[{context.job.id}] Fetching content for {len(context.job.inputs)} on-the-fly inputs from Data Service.")
+│   │   │               
+│   │   │               # Create a list of concurrent tasks to fetch content for all files
+│   │   │               fetch_tasks = []
+│   │   │               for inp in context.job.inputs:
+│   │   │                   if inp.get('type') == 'file_id' and inp.get('id'):
+│   │   │                       task = self.data_client.get_file_content(
+│   │   │                           file_id=inp['id'], 
+│   │   │                           user_id=context.job.user_id
+│   │   │                       )
+│   │   │                       fetch_tasks.append(task)
+│   │   │               
+│   │   │               if not fetch_tasks:
+│   │   │                   return context
+│   │   │       
+│   │   │               # Run all fetch tasks in parallel
+│   │   │               results = await asyncio.gather(*fetch_tasks)
+│   │   │               context.on_the_fly_data = results
+│   │   │               
+│   │   │               logger.info(f"[{context.job.id}] Successfully fetched and parsed content for {len(results)} on-the-fly data item(s).")
+│   │   │               return context
+│   │   │   ]
+│   │   │   memory_builder.py
+│   │   │   [
+│   │   │       # MS6/app/execution/builders/memory_builder.py
+│   │   │       
+│   │   │       from .base_builder import BaseBuilder
+│   │   │       from app.execution.build_context import BuildContext
+│   │   │       from app.logging_config import logger
+│   │   │       from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
+│   │   │       
+│   │   │       class MemoryBuilder(BaseBuilder):
+│   │   │           """
+│   │   │           Formats the conversation history received from the Memory Service
+│   │   │           into a list of LangChain message objects. This version correctly and
+│   │   │           safely parses the rich message format.
+│   │   │           """
+│   │   │           async def build(self, context: BuildContext) -> BuildContext:
+│   │   │               job = context.job
+│   │   │               memory_context = job.memory_context
+│   │   │               
+│   │   │               if not memory_context or not memory_context.get("history"):
+│   │   │                   return context
+│   │   │       
+│   │   │               logger.info(f"[{job.id}] Formatting chat history from Memory Service.")
+│   │   │               
+│   │   │               history_messages: list[BaseMessage] = []
+│   │   │               for msg in memory_context.get("history", []):
+│   │   │                   
+│   │   │                   # --- THE DEFINITIVE FIX IS HERE ---
+│   │   │                   role = msg.get("role")
+│   │   │                   content_dict = msg.get("content")
+│   │   │                   
+│   │   │                   # Safely extract the text content from the 'parts' array
+│   │   │                   text_content = ""
+│   │   │                   if isinstance(content_dict, list) and content_dict:
+│   │   │                       # Find the first part with type 'text' and get its content
+│   │   │                       first_text_part = next((part for part in content_dict if part.get("type") == "text"), None)
+│   │   │                       if first_text_part:
+│   │   │                           text_content = first_text_part.get("text", "")
+│   │   │                   # --- END OF FIX ---
+│   │   │                   
+│   │   │                   if role == "user":
+│   │   │                       history_messages.append(HumanMessage(content=text_content))
+│   │   │                   elif role == "assistant":
+│   │   │                       history_messages.append(AIMessage(content=text_content))
+│   │   │               
+│   │   │               context.memory = history_messages
+│   │   │               
+│   │   │               logger.info(f"[{job.id}] Formatted {len(history_messages)} messages from history.")
+│   │   │               return context
+│   │   │   ]
+│   │   │   model_builder.py
+│   │   │   [
+│   │   │       # MS6/app/execution/builders/model_builder.py
+│   │   │       
+│   │   │       from .base_builder import BaseBuilder
+│   │   │       from app.execution.build_context import BuildContext
+│   │   │       from app.logging_config import logger
+│   │   │       from langchain_openai import ChatOpenAI
+│   │   │       from langchain_community.chat_models import ChatOllama
+│   │   │       from langchain_google_genai import ChatGoogleGenerativeAI
+│   │   │       
+│   │   │       def find_config_value(config: dict, key_to_find: str):
+│   │   │           """
+│   │   │           Recursively searches a nested dictionary for a specific key.
+│   │   │           It prioritizes direct values but will look inside 'properties' and 'default'.
+│   │   │           """
+│   │   │           if not isinstance(config, dict):
+│   │   │               return None
+│   │   │       
+│   │   │           # Priority 1: Check for the key at the current level
+│   │   │           if key_to_find in config:
+│   │   │               return config[key_to_find]
+│   │   │       
+│   │   │           # Priority 2: Recursively search through all values in the dictionary
+│   │   │           for key, value in config.items():
+│   │   │               if isinstance(value, dict):
+│   │   │                   found = find_config_value(value, key_to_find)
+│   │   │                   if found is not None:
+│   │   │                       # Special case for blueprints: if we found the key in a 'properties'
+│   │   │                       # block, we are looking for its 'default' value.
+│   │   │                       if key == 'properties' and isinstance(found, dict) and 'default' in found:
+│   │   │                           return found['default']
+│   │   │                       # If it's just a value, return it
+│   │   │                       elif not isinstance(found, dict):
+│   │   │                           return found
+│   │   │           return None
+│   │   │       
+│   │   │       class ModelBuilder(BaseBuilder):
+│   │   │           """
+│   │   │           Instantiates the correct LangChain chat model using a dynamic,
+│   │   │           introspective approach to parse any valid configuration structure.
+│   │   │           """
+│   │   │           async def build(self, context: BuildContext) -> BuildContext:
+│   │   │               job = context.job
+│   │   │               model_data = job.model_config
+│   │   │               
+│   │   │               provider = model_data.get("provider")
+│   │   │               config_values = model_data.get("configuration", {})
+│   │   │       
+│   │   │               final_params = {**job.default_params, **job.param_overrides}
+│   │   │               
+│   │   │               logger.info(f"[{job.id}] Building LLM for provider: '{provider}' using dynamic config parser.")
+│   │   │       
+│   │   │               if provider == "openai":
+│   │   │                   api_key = find_config_value(config_values, "api_key")
+│   │   │                   model_name = final_params.pop("model_name", find_config_value(config_values, "model_name")) or "gpt-4o"
+│   │   │       
+│   │   │                   if not api_key:
+│   │   │                       raise ValueError(f"Dynamically failed to find 'api_key' in OpenAI configuration.")
+│   │   │                   context.llm = ChatOpenAI(api_key=api_key, model=model_name, **final_params)
+│   │   │       
+│   │   │               elif provider == "ollama" or "ollamaDeepSeek":
+│   │   │                   model_name = final_params.pop("model_name", find_config_value(config_values, "model_name"))
+│   │   │                   base_url = final_params.pop("base_url", find_config_value(config_values, "base_url"))
+│   │   │       
+│   │   │                   if not model_name or not base_url:
+│   │   │                       raise ValueError(f"Dynamically failed to find 'base_url' or 'model_name' in Ollama configuration.")
+│   │   │                   
+│   │   │                   context.llm = ChatOllama(base_url=base_url, model=model_name, **final_params)
+│   │   │                   
+│   │   │               elif provider == "google":
+│   │   │                   api_key = find_config_value(config_values, "api_key")
+│   │   │                   model_name = final_params.pop("model_name", find_config_value(config_values, "model_name")) or "gemini-pro"
+│   │   │                   
+│   │   │                   if not api_key:
+│   │   │                        raise ValueError(f"Dynamically failed to find 'api_key' in Google configuration.")
+│   │   │                   context.llm = ChatGoogleGenerativeAI(google_api_key=api_key, model=model_name, **final_params)
+│   │   │                   
+│   │   │               else:
+│   │   │                   raise ValueError(f"Unsupported LLM provider: '{provider}'")
+│   │   │               
+│   │   │               logger.info(f"[{job.id}] LLM '{config_values.get('model_name') or model_name}' on provider '{provider}' built successfully.")
+│   │   │               return context
+│   │   │   ]
+│   │   │   prompt_builder.py
+│   │   │   [
+│   │   │       from .base_builder import BaseBuilder
+│   │   │       from app.execution.build_context import BuildContext
+│   │   │       from app.logging_config import logger # <-- Correct import
+│   │   │       from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+│   │   │       
+│   │   │       class PromptBuilder(BaseBuilder):
+│   │   │           """Assembles the final prompt template and input variables."""
+│   │   │           async def build(self, context: BuildContext) -> BuildContext:
+│   │   │               job = context.job
+│   │   │               logger.info(f"[{job.id}] Assembling final prompt.")
+│   │   │               
+│   │   │               context_str = ""
+│   │   │               if job.rag_docs:
+│   │   │                   context_str += "--- Context from Knowledge Base ---\n"
+│   │   │                   for doc in job.rag_docs:
+│   │   │                       context_str += f"Content: {doc.get('content')}\n\n"
+│   │   │               
+│   │   │               if context.on_the_fly_data:
+│   │   │                   context_str += "--- Context from Provided Files ---\n"
+│   │   │                   for data in context.on_the_fly_data:
+│   │   │                       context_str += f"Content: {data.get('content')}\n\n"
+│   │   │       
+│   │   │               if context_str:
+│   │   │                   final_prompt_text = f"{context_str}Based on the context above, please respond to the following:\n\n{job.prompt_text}"
+│   │   │               else:
+│   │   │                   final_prompt_text = job.prompt_text
+│   │   │                   
+│   │   │               context.final_input = {"input": final_prompt_text}
+│   │   │       
+│   │   │               messages = [("system", "You are a helpful and intelligent AI assistant.")]
+│   │   │               if context.memory:
+│   │   │                   messages.append(MessagesPlaceholder(variable_name="chat_history"))
+│   │   │               messages.append(("user", "{input}"))
+│   │   │               if context.tools:
+│   │   │                   messages.append(MessagesPlaceholder(variable_name="agent_scratchpad"))
+│   │   │       
+│   │   │               context.prompt_template = ChatPromptTemplate.from_messages(messages)
+│   │   │               logger.info(f"[{job.id}] Prompt assembly complete.")
+│   │   │               return context
+│   │   │   ]
+│   │   │   tool_builder.py
+│   │   │   [
+│   │   │       # MS6/app/execution/builders/tool_builder.py
+│   │   │       
+│   │   │       from .base_builder import BaseBuilder
+│   │   │       from app.execution.build_context import BuildContext
+│   │   │       from app.logging_config import logger
+│   │   │       from app.internals.clients import ToolServiceClient
+│   │   │       from langchain_core.tools import Tool
+│   │   │       from pydantic import BaseModel, Field, create_model
+│   │   │       import asyncio
+│   │   │       import uuid
+│   │   │       
+│   │   │       # --- THE FIX: A placeholder synchronous function ---
+│   │   │       def _placeholder_sync_func(*args, **kwargs):
+│   │   │           """
+│   │   │           LangChain's Tool class requires a sync function, even if we only use the async one.
+│   │   │           This placeholder will never be called if the agent is run asynchronously.
+│   │   │           """
+│   │   │           raise NotImplementedError("This tool can only be run asynchronously.")
+│   │   │       # --- END OF FIX ---
+│   │   │       
+│   │   │       class ToolBuilder(BaseBuilder):
+│   │   │           """Creates LangChain-compatible tool objects from definitions."""
+│   │   │           def __init__(self):
+│   │   │               self.tool_service_client = ToolServiceClient()
+│   │   │       
+│   │   │           async def build(self, context: BuildContext) -> BuildContext:
+│   │   │               if not context.job.tool_definitions:
+│   │   │                   return context
+│   │   │               
+│   │   │               logger.info(f"[{context.job.id}] Building {len(context.job.tool_definitions)} tools.")
+│   │   │               
+│   │   │               for definition in context.job.tool_definitions:
+│   │   │                   tool_name = definition["name"]
+│   │   │                   
+│   │   │                   fields_for_model = {
+│   │   │                       param_name: (str, Field(..., description=schema.get("description")))
+│   │   │                       for param_name, schema in definition.get("parameters", {}).get("properties", {
+│   │   │                       }).items()
+│   │   │                   }
+│   │   │                   
+│   │   │                   DynamicArgsSchema = create_model(
+│   │   │                       f"{tool_name}ArgsSchema",
+│   │   │                       **fields_for_model
+│   │   │                   )
+│   │   │       
+│   │   │                   async def _execute_tool(**kwargs):
+│   │   │                       tool_call_id = f"{context.job.id}-{tool_name}-{uuid.uuid4()}"
+│   │   │                       tool_call = [{"id": tool_call_id, "name": tool_name, "args": kwargs}]
+│   │   │                       
+│   │   │                       logger.info(f"[{context.job.id}] Agent requested to execute tool '{tool_name}' with args: {kwargs}")
+│   │   │                       results = await self.tool_service_client.execute_tools(tool_call)
+│   │   │                       
+│   │   │                       output = f"Error: No result from tool '{tool_name}'."
+│   │   │                       if results and results[0]['status'] == 'success':
+│   │   │                           output = results[0]["output"]
+│   │   │                       elif results:
+│   │   │                           output = f"Error from tool '{tool_name}': {results[0]['output']}"
+│   │   │       
+│   │   │                       logger.info(f"[{context.job.id}] Tool '{tool_name}' returned: {output[:100]}...")
+│   │   │                       return output
+│   │   │       
+│   │   │                   # --- THE FIX: Provide the required 'func' argument ---
+│   │   │                   dynamic_tool = Tool(
+│   │   │                       name=tool_name,
+│   │   │                       description=definition["description"],
+│   │   │                       args_schema=DynamicArgsSchema,
+│   │   │                       func=_placeholder_sync_func, # <-- Pass the placeholder sync function
+│   │   │                       coroutine=_execute_tool,      # <-- Pass the real async function
+│   │   │                       verbose=True
+│   │   │                   )
+│   │   │                   # --- END OF FIX ---
+│   │   │                   
+│   │   │                   context.tools.append(dynamic_tool)
+│   │   │       
+│   │   │               logger.info(f"[{context.job.id}] Tools built successfully.")
+│   │   │               return context
+│   │   │               
+│   │   │   ]
+│   │   executor.py
+│   │   [
+│   │       # MS6/app/execution/executor.py
+│   │       
+│   │       from langchain.agents import AgentExecutor, create_tool_calling_agent
+│   │       from langchain_core.messages import AIMessage, AIMessageChunk
+│   │       
+│   │       from app.logging_config import logger
+│   │       from app.execution.build_context import BuildContext
+│   │       from app.messaging.publisher import ResultPublisher
+│   │       
+│   │       class Executor:
+│   │           """
+│   │           Takes a fully built context and executes the final LangChain runnable.
+│   │           This version is completely STATELESS, passing chat history directly
+│   │           into each call as required by the microservice architecture.
+│   │           """
+│   │           
+│   │           def __init__(self, context: BuildContext, publisher: ResultPublisher):
+│   │               self.context = context
+│   │               self.job = context.job
+│   │               self.publisher = publisher
+│   │       
+│   │           def _get_final_content(self, result) -> str:
+│   │               """
+│   │               Safely extracts the final string content from a LangChain result,
+│   │               which could be a dict (from an agent) or a message object (from a chain).
+│   │               """
+│   │               if isinstance(result, dict):
+│   │                   # AgentExecutor returns a dictionary, the final answer is in the 'output' key.
+│   │                   return result.get('output', '')
+│   │               elif hasattr(result, 'content'):
+│   │                   # Simple chains (prompt | llm) return a message object with a .content attribute.
+│   │                   return result.content
+│   │               return str(result)
+│   │       
+│   │           async def run(self):
+│   │               """
+│   │               The main execution method. It assembles the final runnable,
+│   │               invokes it, and handles publishing the results and feedback.
+│   │               """
+│   │               logger.info(f"[{self.job.id}] Starting final chain execution.")
+│   │               final_result = ""
+│   │       
+│   │               # 1. Determine the core runnable: an agent if tools exist, otherwise a simple chain.
+│   │               if self.context.tools:
+│   │                   logger.info(f"[{self.job.id}] Assembling AgentExecutor with {len(self.context.tools)} tools.")
+│   │                   agent = create_tool_calling_agent(self.context.llm, self.context.tools, self.context.prompt_template)
+│   │                   runnable = AgentExecutor(agent=agent, tools=self.context.tools, verbose=True)
+│   │               else:
+│   │                   logger.info(f"[{self.job.id}] Assembling a simple LLM chain (no tools).")
+│   │                   runnable = self.context.prompt_template | self.context.llm
+│   │       
+│   │               # 2. Add the pre-formatted chat history directly to the input payload.
+│   │               #    This makes the execution completely stateless.
+│   │               if self.context.memory:
+│   │                   self.context.final_input["chat_history"] = self.context.memory
+│   │                   logger.info(f"[{self.job.id}] Added {len(self.context.memory)} messages from history to the input.")
+│   │               
+│   │               # 3. Execute the chain and handle the output.
+│   │               if self.job.is_streaming:
+│   │                   final_result = await self._stream_and_publish(runnable, self.context.final_input)
+│   │               else:
+│   │                   result = await runnable.ainvoke(self.context.final_input)
+│   │                   final_result = self._get_final_content(result)
+│   │                   logger.info(f"[{self.job.id}] FINAL BLOCKING RESPONSE:\n---\n{final_result}\n---")
+│   │                   await self.publisher.publish_final_result(self.job.id, final_result)
+│   │               
+│   │               # 4. Trigger the memory feedback loop after the job is fully complete.
+│   │               await self.publisher.publish_memory_update(self.job, final_result, self.context.final_input) # new update 
+│   │       
+│   │           async def _stream_and_publish(self, chain, input_data: dict) -> str:
+│   │               """
+│   │               Handles streaming the output and publishing chunks. This is stateless.
+│   │               """
+│   │               final_result = ""
+│   │               logger.info(f"[{self.job.id}] Executing in streaming mode.")
+│   │               
+│   │               try:
+│   │                   async for chunk in chain.astream(input_data):
+│   │                       output_chunk = ""
+│   │                       if isinstance(chunk, dict):
+│   │                           # AgentExecutor yields dicts. The content is in the 'messages' key for streaming.
+│   │                           # We look for the content of the last AIMessageChunk.
+│   │                           messages = chunk.get('messages', [])
+│   │                           if messages and isinstance(messages[-1], AIMessageChunk):
+│   │                               output_chunk = messages[-1].content
+│   │                       elif isinstance(chunk, AIMessageChunk):
+│   │                           # Simple chains yield AIMessageChunk objects directly.
+│   │                           output_chunk = chunk.content
+│   │       
+│   │                       if isinstance(output_chunk, str) and output_chunk:
+│   │                           await self.publisher.publish_stream_chunk(self.job.id, output_chunk)
+│   │                           final_result += output_chunk
+│   │               except Exception as e:
+│   │                   logger.error(f"[{self.job.id}] An error occurred during streaming: {e}", exc_info=True)
+│   │                   await self.publisher.publish_error_result(self.job.id, f"An error occurred during streaming: {e}")
+│   │                   return ""
+│   │               
+│   │               logger.info(f"[{self.job.id}] FINAL STREAMED RESPONSE (concatenated):\n---\n{final_result}\n---")
+│   │               await self.publisher.publish_final_result(self.job.id, final_result)
+│   │               
+│   │               return final_result
+│   │   ]
+│   │   job.py
+│   │   [
+│   │       import uuid
+│   │       class Job:
+│   │           """A data class providing a clean, validated, and DEFENSIVE interface to the raw job payload."""
+│   │           def __init__(self, payload: dict):
+│   │               if not isinstance(payload, dict):
+│   │                   raise TypeError("Job payload must be a dictionary.")
+│   │               
+│   │               self.id = payload.get("job_id", str(uuid.uuid4()))
+│   │               self.user_id = payload.get("user_id")
+│   │               self.query = payload.get("query", {})
+│   │               self.prompt_text = self.query.get("prompt", "")
+│   │               self.inputs = self.query.get("inputs", [])
+│   │               self.default_params = payload.get("default_parameters", {})
+│   │               self.param_overrides = self.query.get("parameter_overrides", {})
+│   │               self.output_config = self.query.get("output_config", {})
+│   │               self.is_streaming = self.output_config.get("mode") == "streaming"
+│   │               self.persist_inputs_in_memory = self.output_config.get("persist_inputs_in_memory", False)
+│   │       
+│   │               # --- THE DEFENSIVE FIX IS HERE ---
+│   │               # Get the resources dictionary, defaulting to an empty dict if it's missing or None.
+│   │               self.resources = payload.get("resources") or {}
+│   │               # --- END OF FIX ---
+│   │               
+│   │               self.model_config = self.resources.get("model_config", {})
+│   │               self.tool_definitions = self.resources.get("tools")
+│   │               self.rag_docs = (self.resources.get("rag_context") or {}).get("documents", [])
+│   │               self.memory_context = self.resources.get("memory_context") or {}
+│   │           
+│   │           @property
+│   │           def feedback_ids(self):
+│   │               return {
+│   │                   "memory_bucket_id": self.memory_context.get("bucket_id"),
+│   │                   "rag_collection_id": (self.resources.get("rag_context") or {}).get("collection_id")
+│   │               }
+│   │   ]
+│   │   pipeline.py
+│   │   [
+│   │       from app.execution.build_context import BuildContext
+│   │       from app.execution.builders.data_builder import DataBuilder
+│   │       from app.execution.builders.model_builder import ModelBuilder
+│   │       from app.execution.builders.memory_builder import MemoryBuilder
+│   │       from app.execution.builders.tool_builder import ToolBuilder
+│   │       from app.execution.builders.prompt_builder import PromptBuilder
+│   │       
+│   │       class ChainConstructionPipeline:
+│   │           """Orchestrates the step-by-step construction of a runnable LangChain chain."""
+│   │           def __init__(self, context: BuildContext):
+│   │               self.context = context
+│   │               # The order of builders is critical
+│   │               self.pipeline = [
+│   │                   DataBuilder(),
+│   │                   ModelBuilder(),
+│   │                   MemoryBuilder(),
+│   │                   ToolBuilder(), # Now included
+│   │                   PromptBuilder(),
+│   │               ]
+│   │       
+│   │           async def run(self) -> BuildContext:
+│   │               for builder in self.pipeline:
+│   │                   self.context = await builder.build(self.context)
+│   │               return self.context
+│   │   ]
+│   ├───internals
+│   │   __init__.py
+│   │   [
+│   │       
+│   │   ]
+│   │   clients.py
+│   │   [
+│   │       # gRPC and HTTP clients
+│   │       import grpc
+│   │       import httpx
+│   │       import asyncio
+│   │       import json
+│   │       from app import config
+│   │       #from app.internals.generated import tool_pb2, tool_pb2_grpc
+│   │       from google.protobuf.json_format import MessageToDict
+│   │       from google.protobuf.struct_pb2 import Struct
+│   │       from app.logging_config import logging
+│   │       from app.internals.generated import data_pb2, data_pb2_grpc
+│   │       
+│   │       
+│   │       logger = logging.getLogger(__name__)
+│   │       
+│   │       class ToolServiceClient:
+│   │           """A client for interacting with the gRPC Tool Service."""
+│   │           
+│   │           async def execute_tools(self, tool_calls: list[dict]) -> list[dict]:
+│   │               """
+│   │               Executes one or more tools in parallel by calling the Tool Service.
+│   │               """
+│   │               try:
+│   │                   async with grpc.aio.insecure_channel(config.TOOL_SERVICE_GRPC_URL) as channel:
+│   │                       #stub = tool_pb2_grpc.ToolServiceStub(channel)
+│   │                       
+│   │                       proto_tool_calls = []
+│   │                       for call in tool_calls:
+│   │                           arguments = Struct()
+│   │                           # LangChain can sometimes pass stringified JSON, so we handle both dicts and strings.
+│   │                           args_data = call.get("args", {})
+│   │                           if isinstance(args_data, str):
+│   │                               try:
+│   │                                   args_data = json.loads(args_data)
+│   │                               except json.JSONDecodeError:
+│   │                                   logger.warning(f"Could not decode string arguments for tool {call.get('name')}: {args_data}")
+│   │                                   args_data = {}
+│   │                           
+│   │                           if isinstance(args_data, dict):
+│   │                               arguments.update(args_data)
+│   │       
+│   │                           #proto_tool_calls.append(tool_pb2.ToolCall(
+│   │                           #    id=call.get("id"),
+│   │                           #    name=call.get("name"),
+│   │                           #    arguments=arguments
+│   │                           #))
+│   │       
+│   │                       #request = tool_pb2.ExecuteMultipleToolsRequest(tool_calls=proto_tool_calls)
+│   │                       #response = await stub.ExecuteMultipleTools(request, timeout=30.0)
+│   │                       
+│   │                       return [
+│   │                           #{
+│   │                           #    "tool_call_id": res.tool_call_id,
+│   │                           #    "name": res.name,
+│   │                           #    "status": res.status,
+│   │                           #    "output": res.output
+│   │                           #}
+│   │                           #for res in response.results
+│   │                       ]
+│   │               except grpc.aio.AioRpcError as e:
+│   │                   logger.error(f"gRPC error executing tools: {e.details()}")
+│   │                   # Return an error structure that the agent can understand
+│   │                   return [
+│   │                       {
+│   │                           "tool_call_id": call.get("id"),
+│   │                           "name": call.get("name"),
+│   │                           "status": "error",
+│   │                           "output": f"Error calling tool service: {e.details()}"
+│   │                       } for call in tool_calls
+│   │                   ]
+│   │       
+│   │       class DataServiceClient:
+│   │           """A client for fetching the parsed content of on-the-fly files."""
+│   │           
+│   │           async def get_file_content(self, file_id: str, user_id: str) -> dict:
+│   │               """
+│   │               Fetches and returns the parsed content of a single file from MS10.
+│   │               """
+│   │               logger.info(f"Fetching content for file_id: {file_id}")
+│   │               try:
+│   │                   async with grpc.aio.insecure_channel(config.DATA_SERVICE_GRPC_URL) as channel:
+│   │                       stub = data_pb2_grpc.DataServiceStub(channel)
+│   │                       request = data_pb2.GetFileContentRequest(file_id=file_id, user_id=user_id)
+│   │                       response = await stub.GetFileContent(request, timeout=60.0) # Longer timeout for parsing
+│   │                       
+│   │                       # Convert the proto Struct back to a Python dict
+│   │                       return MessageToDict(response.content, preserving_proto_field_name=True)
+│   │                       
+│   │               except grpc.aio.AioRpcError as e:
+│   │                   logger.error(f"gRPC error fetching content for file {file_id}: {e.details()}")
+│   │                   return {"type": "error", "content": f"Error fetching file content: {e.details()}"}
+│   │               except Exception as e:
+│   │                   logger.error(f"Unexpected error in DataServiceClient: {e}")
+│   │                   return {"type": "error", "content": f"Unexpected error fetching file content."}
+│   │   ]
+│   │   ├───generated
+│   │   │   __init__.py
+│   │   │   [
+│   │   │       
+│   │   │   ]
+│   │   │   data_pb2.py
+│   │   │   [
+│   │   │       # -*- coding: utf-8 -*-
+│   │   │       # Generated by the protocol buffer compiler.  DO NOT EDIT!
+│   │   │       # NO CHECKED-IN PROTOBUF GENCODE
+│   │   │       # source: data.proto
+│   │   │       # Protobuf Python Version: 6.31.1
+│   │   │       """Generated protocol buffer code."""
+│   │   │       from google.protobuf import descriptor as _descriptor
+│   │   │       from google.protobuf import descriptor_pool as _descriptor_pool
+│   │   │       from google.protobuf import runtime_version as _runtime_version
+│   │   │       from google.protobuf import symbol_database as _symbol_database
+│   │   │       from google.protobuf.internal import builder as _builder
+│   │   │       _runtime_version.ValidateProtobufRuntimeVersion(
+│   │   │           _runtime_version.Domain.PUBLIC,
+│   │   │           6,
+│   │   │           31,
+│   │   │           1,
+│   │   │           '',
+│   │   │           'data.proto'
+│   │   │       )
+│   │   │       # @@protoc_insertion_point(imports)
+│   │   │       
+│   │   │       _sym_db = _symbol_database.Default()
+│   │   │       
+│   │   │       
+│   │   │       from google.protobuf import struct_pb2 as google_dot_protobuf_dot_struct__pb2
+│   │   │       
+│   │   │       
+│   │   │       DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\ndata.proto\x12\x04\x64\x61ta\x1a\x1cgoogle/protobuf/struct.proto\"9\n\x15GetFileContentRequest\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\x12\x0f\n\x07user_id\x18\x02 \x01(\t\"S\n\x16GetFileContentResponse\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\x12(\n\x07\x63ontent\x18\x02 \x01(\x0b\x32\x17.google.protobuf.Struct\"C\n\x0c\x46ileMetadata\x12\x0f\n\x07\x66ile_id\x18\x01 \x01(\t\x12\x10\n\x08mimetype\x18\x02 \x01(\t\x12\x10\n\x08owner_id\x18\x03 \x01(\t\";\n\x16GetFileMetadataRequest\x12\x10\n\x08\x66ile_ids\x18\x01 \x03(\t\x12\x0f\n\x07user_id\x18\x02 \x01(\t\"?\n\x17GetFileMetadataResponse\x12$\n\x08metadata\x18\x01 \x03(\x0b\x32\x12.data.FileMetadata2\xaa\x01\n\x0b\x44\x61taService\x12K\n\x0eGetFileContent\x12\x1b.data.GetFileContentRequest\x1a\x1c.data.GetFileContentResponse\x12N\n\x0fGetFileMetadata\x12\x1c.data.GetFileMetadataRequest\x1a\x1d.data.GetFileMetadataResponseb\x06proto3')
+│   │   │       
+│   │   │       _globals = globals()
+│   │   │       _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
+│   │   │       _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'data_pb2', _globals)
+│   │   │       if not _descriptor._USE_C_DESCRIPTORS:
+│   │   │         DESCRIPTOR._loaded_options = None
+│   │   │         _globals['_GETFILECONTENTREQUEST']._serialized_start=50
+│   │   │         _globals['_GETFILECONTENTREQUEST']._serialized_end=107
+│   │   │         _globals['_GETFILECONTENTRESPONSE']._serialized_start=109
+│   │   │         _globals['_GETFILECONTENTRESPONSE']._serialized_end=192
+│   │   │         _globals['_FILEMETADATA']._serialized_start=194
+│   │   │         _globals['_FILEMETADATA']._serialized_end=261
+│   │   │         _globals['_GETFILEMETADATAREQUEST']._serialized_start=263
+│   │   │         _globals['_GETFILEMETADATAREQUEST']._serialized_end=322
+│   │   │         _globals['_GETFILEMETADATARESPONSE']._serialized_start=324
+│   │   │         _globals['_GETFILEMETADATARESPONSE']._serialized_end=387
+│   │   │         _globals['_DATASERVICE']._serialized_start=390
+│   │   │         _globals['_DATASERVICE']._serialized_end=560
+│   │   │       # @@protoc_insertion_point(module_scope)
+│   │   │       
+│   │   │   ]
+│   │   │   data_pb2_grpc.py
+│   │   │   [
+│   │   │       # Generated by the gRPC Python protocol compiler plugin. DO NOT EDIT!
+│   │   │       """Client and server classes corresponding to protobuf-defined services."""
+│   │   │       import grpc
+│   │   │       import warnings
+│   │   │       
+│   │   │       from . import data_pb2 as data__pb2
+│   │   │       
+│   │   │       GRPC_GENERATED_VERSION = '1.74.0'
+│   │   │       GRPC_VERSION = grpc.__version__
+│   │   │       _version_not_supported = False
+│   │   │       
+│   │   │       try:
+│   │   │           from grpc._utilities import first_version_is_lower
+│   │   │           _version_not_supported = first_version_is_lower(GRPC_VERSION, GRPC_GENERATED_VERSION)
+│   │   │       except ImportError:
+│   │   │           _version_not_supported = True
+│   │   │       
+│   │   │       if _version_not_supported:
+│   │   │           raise RuntimeError(
+│   │   │               f'The grpc package installed is at version {GRPC_VERSION},'
+│   │   │               + f' but the generated code in data_pb2_grpc.py depends on'
+│   │   │               + f' grpcio>={GRPC_GENERATED_VERSION}.'
+│   │   │               + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
+│   │   │               + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
+│   │   │           )
+│   │   │       
+│   │   │       
+│   │   │       class DataServiceStub(object):
+│   │   │           """Missing associated documentation comment in .proto file."""
+│   │   │       
+│   │   │           def __init__(self, channel):
+│   │   │               """Constructor.
+│   │   │       
+│   │   │               Args:
+│   │   │                   channel: A grpc.Channel.
+│   │   │               """
+│   │   │               self.GetFileContent = channel.unary_unary(
+│   │   │                       '/data.DataService/GetFileContent',
+│   │   │                       request_serializer=data__pb2.GetFileContentRequest.SerializeToString,
+│   │   │                       response_deserializer=data__pb2.GetFileContentResponse.FromString,
+│   │   │                       _registered_method=True)
+│   │   │               self.GetFileMetadata = channel.unary_unary(
+│   │   │                       '/data.DataService/GetFileMetadata',
+│   │   │                       request_serializer=data__pb2.GetFileMetadataRequest.SerializeToString,
+│   │   │                       response_deserializer=data__pb2.GetFileMetadataResponse.FromString,
+│   │   │                       _registered_method=True)
+│   │   │       
+│   │   │       
+│   │   │       class DataServiceServicer(object):
+│   │   │           """Missing associated documentation comment in .proto file."""
+│   │   │       
+│   │   │           def GetFileContent(self, request, context):
+│   │   │               """For MS6: Retrieves the parsed content of a file.
+│   │   │               """
+│   │   │               context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+│   │   │               context.set_details('Method not implemented!')
+│   │   │               raise NotImplementedError('Method not implemented!')
+│   │   │       
+│   │   │           def GetFileMetadata(self, request, context):
+│   │   │               """For MS5: Retrieves file metadata for validation.
+│   │   │               """
+│   │   │               context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+│   │   │               context.set_details('Method not implemented!')
+│   │   │               raise NotImplementedError('Method not implemented!')
+│   │   │       
+│   │   │       
+│   │   │       def add_DataServiceServicer_to_server(servicer, server):
+│   │   │           rpc_method_handlers = {
+│   │   │                   'GetFileContent': grpc.unary_unary_rpc_method_handler(
+│   │   │                           servicer.GetFileContent,
+│   │   │                           request_deserializer=data__pb2.GetFileContentRequest.FromString,
+│   │   │                           response_serializer=data__pb2.GetFileContentResponse.SerializeToString,
+│   │   │                   ),
+│   │   │                   'GetFileMetadata': grpc.unary_unary_rpc_method_handler(
+│   │   │                           servicer.GetFileMetadata,
+│   │   │                           request_deserializer=data__pb2.GetFileMetadataRequest.FromString,
+│   │   │                           response_serializer=data__pb2.GetFileMetadataResponse.SerializeToString,
+│   │   │                   ),
+│   │   │           }
+│   │   │           generic_handler = grpc.method_handlers_generic_handler(
+│   │   │                   'data.DataService', rpc_method_handlers)
+│   │   │           server.add_generic_rpc_handlers((generic_handler,))
+│   │   │           server.add_registered_method_handlers('data.DataService', rpc_method_handlers)
+│   │   │       
+│   │   │       
+│   │   │        # This class is part of an EXPERIMENTAL API.
+│   │   │       class DataService(object):
+│   │   │           """Missing associated documentation comment in .proto file."""
+│   │   │       
+│   │   │           @staticmethod
+│   │   │           def GetFileContent(request,
+│   │   │                   target,
+│   │   │                   options=(),
+│   │   │                   channel_credentials=None,
+│   │   │                   call_credentials=None,
+│   │   │                   insecure=False,
+│   │   │                   compression=None,
+│   │   │                   wait_for_ready=None,
+│   │   │                   timeout=None,
+│   │   │                   metadata=None):
+│   │   │               return grpc.experimental.unary_unary(
+│   │   │                   request,
+│   │   │                   target,
+│   │   │                   '/data.DataService/GetFileContent',
+│   │   │                   data__pb2.GetFileContentRequest.SerializeToString,
+│   │   │                   data__pb2.GetFileContentResponse.FromString,
+│   │   │                   options,
+│   │   │                   channel_credentials,
+│   │   │                   insecure,
+│   │   │                   call_credentials,
+│   │   │                   compression,
+│   │   │                   wait_for_ready,
+│   │   │                   timeout,
+│   │   │                   metadata,
+│   │   │                   _registered_method=True)
+│   │   │       
+│   │   │           @staticmethod
+│   │   │           def GetFileMetadata(request,
+│   │   │                   target,
+│   │   │                   options=(),
+│   │   │                   channel_credentials=None,
+│   │   │                   call_credentials=None,
+│   │   │                   insecure=False,
+│   │   │                   compression=None,
+│   │   │                   wait_for_ready=None,
+│   │   │                   timeout=None,
+│   │   │                   metadata=None):
+│   │   │               return grpc.experimental.unary_unary(
+│   │   │                   request,
+│   │   │                   target,
+│   │   │                   '/data.DataService/GetFileMetadata',
+│   │   │                   data__pb2.GetFileMetadataRequest.SerializeToString,
+│   │   │                   data__pb2.GetFileMetadataResponse.FromString,
+│   │   │                   options,
+│   │   │                   channel_credentials,
+│   │   │                   insecure,
+│   │   │                   call_credentials,
+│   │   │                   compression,
+│   │   │                   wait_for_ready,
+│   │   │                   timeout,
+│   │   │                   metadata,
+│   │   │                   _registered_method=True)
+│   │   │       
+│   │   │   ]
+│   │   │   tool_pb2.py
+│   │   │   [
+│   │   │       # -*- coding: utf-8 -*-
+│   │   │       # Generated by the protocol buffer compiler.  DO NOT EDIT!
+│   │   │       # NO CHECKED-IN PROTOBUF GENCODE
+│   │   │       # source: tool.proto
+│   │   │       # Protobuf Python Version: 6.31.1
+│   │   │       """Generated protocol buffer code."""
+│   │   │       from google.protobuf import descriptor as _descriptor
+│   │   │       from google.protobuf import descriptor_pool as _descriptor_pool
+│   │   │       from google.protobuf import runtime_version as _runtime_version
+│   │   │       from google.protobuf import symbol_database as _symbol_database
+│   │   │       from google.protobuf.internal import builder as _builder
+│   │   │       _runtime_version.ValidateProtobufRuntimeVersion(
+│   │   │           _runtime_version.Domain.PUBLIC,
+│   │   │           6,
+│   │   │           31,
+│   │   │           1,
+│   │   │           '',
+│   │   │           'tool.proto'
+│   │   │       )
+│   │   │       # @@protoc_insertion_point(imports)
+│   │   │       
+│   │   │       _sym_db = _symbol_database.Default()
+│   │   │       
+│   │   │       
+│   │   │       from google.protobuf import struct_pb2 as google_dot_protobuf_dot_struct__pb2
+│   │   │       
+│   │   │       
+│   │   │       DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\ntool.proto\x12\x04tool\x1a\x1cgoogle/protobuf/struct.proto\"P\n\x08ToolCall\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12*\n\targuments\x18\x03 \x01(\x0b\x32\x17.google.protobuf.Struct\"A\n\x1b\x45xecuteMultipleToolsRequest\x12\"\n\ntool_calls\x18\x01 \x03(\x0b\x32\x0e.tool.ToolCall\"P\n\nToolResult\x12\x14\n\x0ctool_call_id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\x12\x0e\n\x06output\x18\x04 \x01(\t\"A\n\x1c\x45xecuteMultipleToolsResponse\x12!\n\x07results\x18\x01 \x03(\x0b\x32\x10.tool.ToolResult\">\n\x19GetToolDefinitionsRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\t\x12\x10\n\x08tool_ids\x18\x02 \x03(\t\"J\n\x1aGetToolDefinitionsResponse\x12,\n\x0b\x64\x65\x66initions\x18\x01 \x03(\x0b\x32\x17.google.protobuf.Struct\"9\n\x14ValidateToolsRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\t\x12\x10\n\x08tool_ids\x18\x02 \x03(\t\"B\n\x15ValidateToolsResponse\x12\x12\n\nauthorized\x18\x01 \x01(\x08\x12\x15\n\rerror_message\x18\x02 \x01(\t2\x8f\x02\n\x0bToolService\x12]\n\x14\x45xecuteMultipleTools\x12!.tool.ExecuteMultipleToolsRequest\x1a\".tool.ExecuteMultipleToolsResponse\x12H\n\rValidateTools\x12\x1a.tool.ValidateToolsRequest\x1a\x1b.tool.ValidateToolsResponse\x12W\n\x12GetToolDefinitions\x12\x1f.tool.GetToolDefinitionsRequest\x1a .tool.GetToolDefinitionsResponseb\x06proto3')
+│   │   │       
+│   │   │       _globals = globals()
+│   │   │       _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
+│   │   │       _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'tool_pb2', _globals)
+│   │   │       if not _descriptor._USE_C_DESCRIPTORS:
+│   │   │         DESCRIPTOR._loaded_options = None
+│   │   │         _globals['_TOOLCALL']._serialized_start=50
+│   │   │         _globals['_TOOLCALL']._serialized_end=130
+│   │   │         _globals['_EXECUTEMULTIPLETOOLSREQUEST']._serialized_start=132
+│   │   │         _globals['_EXECUTEMULTIPLETOOLSREQUEST']._serialized_end=197
+│   │   │         _globals['_TOOLRESULT']._serialized_start=199
+│   │   │         _globals['_TOOLRESULT']._serialized_end=279
+│   │   │         _globals['_EXECUTEMULTIPLETOOLSRESPONSE']._serialized_start=281
+│   │   │         _globals['_EXECUTEMULTIPLETOOLSRESPONSE']._serialized_end=346
+│   │   │         _globals['_GETTOOLDEFINITIONSREQUEST']._serialized_start=348
+│   │   │         _globals['_GETTOOLDEFINITIONSREQUEST']._serialized_end=410
+│   │   │         _globals['_GETTOOLDEFINITIONSRESPONSE']._serialized_start=412
+│   │   │         _globals['_GETTOOLDEFINITIONSRESPONSE']._serialized_end=486
+│   │   │         _globals['_VALIDATETOOLSREQUEST']._serialized_start=488
+│   │   │         _globals['_VALIDATETOOLSREQUEST']._serialized_end=545
+│   │   │         _globals['_VALIDATETOOLSRESPONSE']._serialized_start=547
+│   │   │         _globals['_VALIDATETOOLSRESPONSE']._serialized_end=613
+│   │   │         _globals['_TOOLSERVICE']._serialized_start=616
+│   │   │         _globals['_TOOLSERVICE']._serialized_end=887
+│   │   │       # @@protoc_insertion_point(module_scope)
+│   │   │       
+│   │   │   ]
+│   │   │   tool_pb2_grpc.py
+│   │   │   [
+│   │   │       # Generated by the gRPC Python protocol compiler plugin. DO NOT EDIT!
+│   │   │       """Client and server classes corresponding to protobuf-defined services."""
+│   │   │       import grpc
+│   │   │       import warnings
+│   │   │       
+│   │   │       from . import tool_pb2 as tool__pb2
+│   │   │       
+│   │   │       GRPC_GENERATED_VERSION = '1.74.0'
+│   │   │       GRPC_VERSION = grpc.__version__
+│   │   │       _version_not_supported = False
+│   │   │       
+│   │   │       try:
+│   │   │           from grpc._utilities import first_version_is_lower
+│   │   │           _version_not_supported = first_version_is_lower(GRPC_VERSION, GRPC_GENERATED_VERSION)
+│   │   │       except ImportError:
+│   │   │           _version_not_supported = True
+│   │   │       
+│   │   │       if _version_not_supported:
+│   │   │           raise RuntimeError(
+│   │   │               f'The grpc package installed is at version {GRPC_VERSION},'
+│   │   │               + f' but the generated code in tool_pb2_grpc.py depends on'
+│   │   │               + f' grpcio>={GRPC_GENERATED_VERSION}.'
+│   │   │               + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
+│   │   │               + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
+│   │   │           )
+│   │   │       
+│   │   │       
+│   │   │       class ToolServiceStub(object):
+│   │   │           """Missing associated documentation comment in .proto file."""
+│   │   │       
+│   │   │           def __init__(self, channel):
+│   │   │               """Constructor.
+│   │   │       
+│   │   │               Args:
+│   │   │                   channel: A grpc.Channel.
+│   │   │               """
+│   │   │               self.ExecuteMultipleTools = channel.unary_unary(
+│   │   │                       '/tool.ToolService/ExecuteMultipleTools',
+│   │   │                       request_serializer=tool__pb2.ExecuteMultipleToolsRequest.SerializeToString,
+│   │   │                       response_deserializer=tool__pb2.ExecuteMultipleToolsResponse.FromString,
+│   │   │                       _registered_method=True)
+│   │   │               self.ValidateTools = channel.unary_unary(
+│   │   │                       '/tool.ToolService/ValidateTools',
+│   │   │                       request_serializer=tool__pb2.ValidateToolsRequest.SerializeToString,
+│   │   │                       response_deserializer=tool__pb2.ValidateToolsResponse.FromString,
+│   │   │                       _registered_method=True)
+│   │   │               self.GetToolDefinitions = channel.unary_unary(
+│   │   │                       '/tool.ToolService/GetToolDefinitions',
+│   │   │                       request_serializer=tool__pb2.GetToolDefinitionsRequest.SerializeToString,
+│   │   │                       response_deserializer=tool__pb2.GetToolDefinitionsResponse.FromString,
+│   │   │                       _registered_method=True)
+│   │   │       
+│   │   │       
+│   │   │       class ToolServiceServicer(object):
+│   │   │           """Missing associated documentation comment in .proto file."""
+│   │   │       
+│   │   │           def ExecuteMultipleTools(self, request, context):
+│   │   │               """MS6 (Executor) calls this RPC to run tools.
+│   │   │               """
+│   │   │               context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+│   │   │               context.set_details('Method not implemented!')
+│   │   │               raise NotImplementedError('Method not implemented!')
+│   │   │       
+│   │   │           def ValidateTools(self, request, context):
+│   │   │               """Other RPCs defined for completeness, but not used by MS6.
+│   │   │               """
+│   │   │               context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+│   │   │               context.set_details('Method not implemented!')
+│   │   │               raise NotImplementedError('Method not implemented!')
+│   │   │       
+│   │   │           def GetToolDefinitions(self, request, context):
+│   │   │               """Missing associated documentation comment in .proto file."""
+│   │   │               context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+│   │   │               context.set_details('Method not implemented!')
+│   │   │               raise NotImplementedError('Method not implemented!')
+│   │   │       
+│   │   │       
+│   │   │       def add_ToolServiceServicer_to_server(servicer, server):
+│   │   │           rpc_method_handlers = {
+│   │   │                   'ExecuteMultipleTools': grpc.unary_unary_rpc_method_handler(
+│   │   │                           servicer.ExecuteMultipleTools,
+│   │   │                           request_deserializer=tool__pb2.ExecuteMultipleToolsRequest.FromString,
+│   │   │                           response_serializer=tool__pb2.ExecuteMultipleToolsResponse.SerializeToString,
+│   │   │                   ),
+│   │   │                   'ValidateTools': grpc.unary_unary_rpc_method_handler(
+│   │   │                           servicer.ValidateTools,
+│   │   │                           request_deserializer=tool__pb2.ValidateToolsRequest.FromString,
+│   │   │                           response_serializer=tool__pb2.ValidateToolsResponse.SerializeToString,
+│   │   │                   ),
+│   │   │                   'GetToolDefinitions': grpc.unary_unary_rpc_method_handler(
+│   │   │                           servicer.GetToolDefinitions,
+│   │   │                           request_deserializer=tool__pb2.GetToolDefinitionsRequest.FromString,
+│   │   │                           response_serializer=tool__pb2.GetToolDefinitionsResponse.SerializeToString,
+│   │   │                   ),
+│   │   │           }
+│   │   │           generic_handler = grpc.method_handlers_generic_handler(
+│   │   │                   'tool.ToolService', rpc_method_handlers)
+│   │   │           server.add_generic_rpc_handlers((generic_handler,))
+│   │   │           server.add_registered_method_handlers('tool.ToolService', rpc_method_handlers)
+│   │   │       
+│   │   │       
+│   │   │        # This class is part of an EXPERIMENTAL API.
+│   │   │       class ToolService(object):
+│   │   │           """Missing associated documentation comment in .proto file."""
+│   │   │       
+│   │   │           @staticmethod
+│   │   │           def ExecuteMultipleTools(request,
+│   │   │                   target,
+│   │   │                   options=(),
+│   │   │                   channel_credentials=None,
+│   │   │                   call_credentials=None,
+│   │   │                   insecure=False,
+│   │   │                   compression=None,
+│   │   │                   wait_for_ready=None,
+│   │   │                   timeout=None,
+│   │   │                   metadata=None):
+│   │   │               return grpc.experimental.unary_unary(
+│   │   │                   request,
+│   │   │                   target,
+│   │   │                   '/tool.ToolService/ExecuteMultipleTools',
+│   │   │                   tool__pb2.ExecuteMultipleToolsRequest.SerializeToString,
+│   │   │                   tool__pb2.ExecuteMultipleToolsResponse.FromString,
+│   │   │                   options,
+│   │   │                   channel_credentials,
+│   │   │                   insecure,
+│   │   │                   call_credentials,
+│   │   │                   compression,
+│   │   │                   wait_for_ready,
+│   │   │                   timeout,
+│   │   │                   metadata,
+│   │   │                   _registered_method=True)
+│   │   │       
+│   │   │           @staticmethod
+│   │   │           def ValidateTools(request,
+│   │   │                   target,
+│   │   │                   options=(),
+│   │   │                   channel_credentials=None,
+│   │   │                   call_credentials=None,
+│   │   │                   insecure=False,
+│   │   │                   compression=None,
+│   │   │                   wait_for_ready=None,
+│   │   │                   timeout=None,
+│   │   │                   metadata=None):
+│   │   │               return grpc.experimental.unary_unary(
+│   │   │                   request,
+│   │   │                   target,
+│   │   │                   '/tool.ToolService/ValidateTools',
+│   │   │                   tool__pb2.ValidateToolsRequest.SerializeToString,
+│   │   │                   tool__pb2.ValidateToolsResponse.FromString,
+│   │   │                   options,
+│   │   │                   channel_credentials,
+│   │   │                   insecure,
+│   │   │                   call_credentials,
+│   │   │                   compression,
+│   │   │                   wait_for_ready,
+│   │   │                   timeout,
+│   │   │                   metadata,
+│   │   │                   _registered_method=True)
+│   │   │       
+│   │   │           @staticmethod
+│   │   │           def GetToolDefinitions(request,
+│   │   │                   target,
+│   │   │                   options=(),
+│   │   │                   channel_credentials=None,
+│   │   │                   call_credentials=None,
+│   │   │                   insecure=False,
+│   │   │                   compression=None,
+│   │   │                   wait_for_ready=None,
+│   │   │                   timeout=None,
+│   │   │                   metadata=None):
+│   │   │               return grpc.experimental.unary_unary(
+│   │   │                   request,
+│   │   │                   target,
+│   │   │                   '/tool.ToolService/GetToolDefinitions',
+│   │   │                   tool__pb2.GetToolDefinitionsRequest.SerializeToString,
+│   │   │                   tool__pb2.GetToolDefinitionsResponse.FromString,
+│   │   │                   options,
+│   │   │                   channel_credentials,
+│   │   │                   insecure,
+│   │   │                   call_credentials,
+│   │   │                   compression,
+│   │   │                   wait_for_ready,
+│   │   │                   timeout,
+│   │   │                   metadata,
+│   │   │                   _registered_method=True)
+│   │   │       
+│   │   │   ]
+│   │   └───protos
+│   │       data.proto
+│   │       [
+│   │           // data_internals/protos/data.proto
+│   │           syntax = "proto3";
+│   │           package data;
+│   │           import "google/protobuf/struct.proto";
+│   │           
+│   │           service DataService {
+│   │             // For MS6: Retrieves the parsed content of a file.
+│   │             rpc GetFileContent(GetFileContentRequest) returns (GetFileContentResponse);
+│   │             
+│   │             // For MS5: Retrieves file metadata for validation.
+│   │             rpc GetFileMetadata(GetFileMetadataRequest) returns (GetFileMetadataResponse);
+│   │           }
+│   │           
+│   │           message GetFileContentRequest {
+│   │             string file_id = 1;
+│   │             string user_id = 2;
+│   │           }
+│   │           
+│   │           message GetFileContentResponse {
+│   │             string file_id = 1;
+│   │             google.protobuf.Struct content = 2; // Flexible for text, image_url, etc.
+│   │           }
+│   │           
+│   │           message FileMetadata {
+│   │               string file_id = 1;
+│   │               string mimetype = 2;
+│   │               string owner_id = 3;
+│   │           }
+│   │           
+│   │           message GetFileMetadataRequest {
+│   │               repeated string file_ids = 1;
+│   │               string user_id = 2;
+│   │           }
+│   │           
+│   │           message GetFileMetadataResponse {
+│   │               repeated FileMetadata metadata = 1;
+│   │           }
+│   │       ]
+│   │       tool.proto
+│   │       [
+│   │           // MS6/app/internals/protos/tool.proto
+│   │           syntax = "proto3";
+│   │           
+│   │           import "google/protobuf/struct.proto";
+│   │           
+│   │           package tool;
+│   │           
+│   │           service ToolService {
+│   │             // MS6 (Executor) calls this RPC to run tools.
+│   │             rpc ExecuteMultipleTools(ExecuteMultipleToolsRequest) returns (ExecuteMultipleToolsResponse);
+│   │           
+│   │             // Other RPCs defined for completeness, but not used by MS6.
+│   │             rpc ValidateTools(ValidateToolsRequest) returns (ValidateToolsResponse);
+│   │             rpc GetToolDefinitions(GetToolDefinitionsRequest) returns (GetToolDefinitionsResponse);
+│   │           }
+│   │           
+│   │           // --- Messages for Tool Execution ---
+│   │           message ToolCall {
+│   │               string id = 1; // ID from the LLM to track the call
+│   │               string name = 2;
+│   │               google.protobuf.Struct arguments = 3;
+│   │           }
+│   │           
+│   │           message ExecuteMultipleToolsRequest {
+│   │             repeated ToolCall tool_calls = 1;
+│   │           }
+│   │           
+│   │           message ToolResult {
+│   │               string tool_call_id = 1;
+│   │               string name = 2;
+│   │               string status = 3; // "success" or "error"
+│   │               string output = 4; // The JSON string result of the tool execution
+│   │           }
+│   │           
+│   │           message ExecuteMultipleToolsResponse {
+│   │               repeated ToolResult results = 1;
+│   │           }
+│   │           
+│   │           
+│   │           // --- Other messages used by other services (for completeness) ---
+│   │           message GetToolDefinitionsRequest {
+│   │             string user_id = 1;
+│   │             repeated string tool_ids = 2;
+│   │           }
+│   │           
+│   │           message GetToolDefinitionsResponse {
+│   │             repeated google.protobuf.Struct definitions = 1;
+│   │           }
+│   │           
+│   │           message ValidateToolsRequest {
+│   │             string user_id = 1;
+│   │             repeated string tool_ids = 2;
+│   │           }
+│   │           
+│   │           message ValidateToolsResponse {
+│   │             bool authorized = 1;
+│   │             string error_message = 2;
+│   │           }
+│   │       ]
+│   logging_config.py
+│   [
+│       # MS6/app/logging_config.py
+│       
+│       import logging
+│       import sys
+│       
+│       # --- THE DEFINITIVE FIX ---
+│       # 1. Define the logger at the module level so it can be imported.
+│       logger = logging.getLogger("MS6-Executor")
+│       # --- END OF FIX ---
+│       
+│       def setup_logging():
+│           """
+│           Configures the root logger for the application.
+│           This function should be called ONLY ONCE at startup in main.py.
+│           """
+│           logging.basicConfig(
+│               level=logging.INFO,
+│               format="%(asctime)s - %(name)s - [%(levelname)s] - %(message)s",
+│               stream=sys.stdout,
+│           )
+│           # Silence noisy libraries
+│           logging.getLogger("aio_pika").setLevel(logging.WARNING)
+│           logging.getLogger("aiormq").setLevel(logging.WARNING)
+│   ]
+│   └───messaging
+│       __init__.py
+│       [
+│           
+│       ]
+│       cancellation_listener.py
+│       [
+│           # MS6/app/messaging/cancellation_listener.py
+│           
+│           import asyncio
+│           import json
+│           import aio_pika
+│           from app import config
+│           from app.logging_config import logger
+│           from .worker import RUNNING_JOBS # Import the global task dictionary
+│           
+│           class CancellationListener:
+│               """
+│               Listens for broadcasted cancellation events. When an event is received,
+│               it checks if the job is running on THIS instance, performs a final
+│               authorization check, and then cancels the asyncio.Task if valid.
+│               """
+│               async def run(self):
+│                   """Connects to RabbitMQ and consumes cancellation messages."""
+│                   while True:
+│                       try:
+│                           connection = await aio_pika.connect_robust(config.RABBITMQ_URL)
+│                           async with connection:
+│                               channel = await connection.channel()
+│                               
+│                               # Declare the FANOUT exchange. It must match the one MS5 publishes to.
+│                               exchange = await channel.declare_exchange(
+│                                   'job_control_fanout_exchange', 
+│                                   aio_pika.ExchangeType.FANOUT, 
+│                                   durable=True
+│                               )
+│                               
+│                               # Declare an exclusive queue. It gets a unique name and is deleted on disconnect.
+│                               # This ensures each MS6 instance gets its own copy of the broadcast.
+│                               queue = await channel.declare_queue(exclusive=True)
+│                               
+│                               # Bind our unique queue to the fanout exchange.
+│                               await queue.bind(exchange)
+│                               
+│                               logger.info(f" [*] Cancellation Listener is waiting for broadcast messages on unique queue '{queue.name}'.")
+│                               await queue.consume(self.on_message)
+│                               await asyncio.Event().wait() # Wait forever
+│                       except aio_pika.exceptions.AMQPConnectionError as e:
+│                           logger.error(f"Cancellation Listener lost RabbitMQ connection: {e}. Retrying in 5s...")
+│                           await asyncio.sleep(5)
+│           
+│               async def on_message(self, message: aio_pika.IncomingMessage):
+│                   """Callback to handle a broadcasted cancellation message."""
+│                   # Acknowledge the message immediately. We don't want to requeue broadcasts.
+│                   async with message.process(requeue=False):
+│                       try:
+│                           payload = json.loads(message.body.decode())
+│                           job_id = payload.get("job_id")
+│                           requesting_user_id = payload.get("user_id") # User who sent the DELETE request
+│           
+│                           if not job_id or not requesting_user_id:
+│                               # Malformed message, ignore silently.
+│                               return
+│           
+│                           # Check if the job is running on THIS instance.
+│                           job_info = RUNNING_JOBS.get(job_id)
+│           
+│                           if job_info:
+│                               # Job found locally. Now perform the authorization check.
+│                               owning_user_id = job_info["job"].user_id
+│                               
+│                               logger.info(f"[{job_id}] Received cancellation broadcast. Checking authorization...")
+│                               logger.info(f"    Job Owner: {owning_user_id} | Requesting User: {requesting_user_id}")
+│           
+│                               if str(owning_user_id) == str(requesting_user_id):
+│                                   # --- AUTHORIZATION PASSED ---
+│                                   task_to_cancel = job_info["task"]
+│                                   task_to_cancel.cancel()
+│                                   logger.warning(f"[{job_id}] AUTHORIZED. CANCEL INTERRUPT SENT to local task.")
+│                               else:
+│                                   # --- AUTHORIZATION FAILED ---
+│                                   logger.error(f"[{job_id}] UNAUTHORIZED cancellation attempt by user {requesting_user_id} on a job owned by {owning_user_id}. Ignoring.")
+│           
+│                           # If job_info is None, this instance is not running the job, so we do nothing.
+│           
+│                       except Exception as e:
+│                           logger.error(f"Failed to process cancellation broadcast message: {e}", exc_info=True)
+│       ]
+│       publisher.py
+│       [
+│           # MS6/app/messaging/publisher.py
+│           
+│           import json
+│           import aio_pika
+│           from app.logging_config import logger
+│           
+│           class ResultPublisher:
+│               """
+│               Handles publishing all outgoing messages from the executor using aio_pika.
+│               This version is fully asynchronous and designed to work with an asyncio event loop.
+│               """
+│               def __init__(self, connection: aio_pika.RobustConnection):
+│                   if not connection or connection.is_closed:
+│                       raise ValueError("A valid, open aio_pika connection must be provided.")
+│                   self.connection = connection
+│           
+│               async def _publish(self, exchange_name: str, routing_key: str, body: dict):
+│                   """Publishes a message using a new channel from the shared connection."""
+│                   try:
+│                       # Create a new channel for this publishing operation
+│                       async with self.connection.channel() as channel:
+│                           exchange = await channel.declare_exchange(
+│                               exchange_name, aio_pika.ExchangeType.TOPIC, durable=True
+│                           )
+│                           message = aio_pika.Message(
+│                               body=json.dumps(body, default=str).encode(),
+│                               delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+│                               content_type="application/json"
+│                           )
+│                           await exchange.publish(message, routing_key=routing_key)
+│                           logger.info(f"Published message to exchange '{exchange_name}' with key '{routing_key}'")
+│                   except Exception as e:
+│                       logger.error(f"Failed to publish to exchange '{exchange_name}': {e}", exc_info=True)
+│           
+│               async def publish_stream_chunk(self, job_id: str, chunk_content: str):
+│                   """Publishes a streaming chunk of the result."""
+│                   await self._publish(
+│                       "results_exchange", 
+│                       f"inference.result.streaming.{job_id}",
+│                       {"job_id": job_id, "type": "chunk", "content": chunk_content}
+│                   )
+│               
+│               async def publish_final_result(self, job_id: str, result_content: str):
+│                   """Publishes the complete, final message."""
+│                   await self._publish(
+│                       "results_exchange", 
+│                       "inference.result.final", 
+│                       {"job_id": job_id, "status": "success", "content": result_content}
+│                   )
+│           
+│               async def publish_error_result(self, job_id: str, error_message: str):
+│                   """Publishes an error message if the job fails."""
+│                   await self._publish(
+│                       "results_exchange", 
+│                       "inference.result.error", 
+│                       {"job_id": job_id, "status": "error", "error": error_message}
+│                   )
+│           
+│               async def publish_memory_update(self, job, final_result: str, final_input: dict = None):
+│                   """Triggers the memory feedback loop."""
+│                   memory_ids = job.feedback_ids
+│                   bucket_id = memory_ids.get("memory_bucket_id")
+│           
+│                   # we could also have the overwrite of the node itself of whether do we want to use memory or not flag on this specific inference as overwrite
+│                   if not bucket_id:
+│                       logger.info(f"[{job.id}] No memory_bucket_id found in job. Skipping memory update feedback.")
+│                       return
+│           
+│                   logger.info(f"[{job.id}] Preparing to publish memory update for bucket: {bucket_id}")
+│           
+│                   # checking if user wants to merge original input query with actual on-the-fly files/image(url) data to save them to memory 
+│                   if job.persist_inputs_in_memory and job.inputs:
+│                       user_message = {"role": "user", "content": []}
+│                       for inp in job.inputs:
+│                           if inp.get('type') == 'file_id' and final_input and 'file_contents' in final_input:
+│                               # Assuming final_input['file_contents'] is a dict mapping file_id to its content
+│                               file_content = final_input['file_contents'].get(inp.get('id'), "File content not found.")
+│                               user_message['content'].append({"type": "text", "text": file_content})
+│                           elif inp.get('type') == 'image_url':
+│                               user_message['content'].append({"type": "image_ref", "url": inp.get('url')})
+│                   else:
+│                       user_message = {"role": "user", "content": [{"type": "text", "text": job.prompt_text}]}
+│                       for inp in job.inputs:
+│                           if inp.get('type') == 'file_id':
+│                               user_message['content'].append({"type": "file_ref", "file_id": inp.get('id')})
+│                           elif inp.get('type') == 'image_url':
+│                               user_message['content'].append({"type": "image_ref", "url": inp.get('url')})
+│           
+│                   assistant_message = {
+│                       "role": "assistant",
+│                       "content": [{"type": "text", "text": final_result}]
+│                   }
+│                   
+│                   update_payload = {
+│                       "idempotency_key": job.id,
+│                       "memory_bucket_id": bucket_id,
+│                       "messages_to_add": [user_message, assistant_message]
+│                   }
+│                   await self._publish("memory_exchange", "memory.context.update", update_payload)
+│       ]
+│       worker.py
+│       [
+│           import asyncio
+│           import json
+│           import aio_pika
+│           from app import config
+│           from app.logging_config import logger
+│           from app.execution.job import Job
+│           from app.execution.build_context import BuildContext
+│           from app.execution.pipeline import ChainConstructionPipeline
+│           from app.execution.executor import Executor
+│           from app.messaging.publisher import ResultPublisher
+│           
+│           
+│           
+│           # --- MODIFICATION ---
+│           # A global dictionary to hold references to running tasks and their job data.
+│           # Structure: { "job_id": {"task": asyncio.Task, "job": Job} }
+│           RUNNING_JOBS = {}
+│           # --- END OF MODIFICATION ---
+│           
+│           class RabbitMQWorker:
+│               """
+│               Manages the asyncio connection and consumption loop for inference jobs.
+│               This version is designed for high-throughput, concurrent job processing.
+│               """
+│               def __init__(self, prefetch_count: int = 10):
+│                   """
+│                   Initializes the worker.
+│                   Args:
+│                       prefetch_count: The maximum number of jobs this worker can
+│                                       process concurrently.
+│                   """
+│                   self.connection = None
+│                   self.result_publisher = None
+│                   self.prefetch_count = prefetch_count
+│           
+│               # --- THIS ENTIRE METHOD IS REWRITTEN FOR MANUAL ACK/NACK ---
+│               async def process_message(self, message: aio_pika.IncomingMessage):
+│                   """
+│                   The core logic for processing a single message.
+│                   This version uses manual acknowledgement to robustly handle cancellations.
+│                   """
+│                   job_id = "unknown"
+│                   task = asyncio.current_task()
+│           
+│                   try:
+│                       # Step 1: Decode the payload first. If this fails, we can reject it.
+│                       payload = json.loads(message.body.decode())
+│                       job = Job(payload)
+│                       job_id = job.id
+│                       
+│                       # Step 2: Register the job and start processing.
+│                       RUNNING_JOBS[job_id] = {"task": task, "job": job}
+│                       logger.info(f"[{job_id}] Task registered for user '{job.user_id}'. Now processing.")
+│           
+│                       build_context = BuildContext(job)
+│                       pipeline = ChainConstructionPipeline(build_context)
+│                       final_context = await pipeline.run()
+│           
+│                       executor = Executor(final_context, self.result_publisher)
+│                       await executor.run()
+│                       
+│                       logger.info(f"[{job_id}] Successfully finished processing job.")
+│                       
+│                       # Step 3 (Happy Path): Acknowledge the message upon successful completion.
+│                       await message.ack()
+│           
+│                   except asyncio.CancelledError:
+│                       logger.warning(f"[{job_id}] Job execution was INTERRUPTED by cancellation signal.")
+│                       if self.result_publisher:
+│                           await self.result_publisher.publish_error_result(job_id, "Job was cancelled by the user.")
+│                       
+│                       # Step 3 (Cancellation Path): Acknowledge the message to remove it from the queue.
+│                       await message.ack()
+│           
+│                   except json.JSONDecodeError:
+│                       logger.error(f"Message body is not valid JSON. Discarding message: {message.body.decode()[:200]}...")
+│                       # Rejecting tells the queue to discard the message (or DLQ it).
+│                       await message.reject(requeue=False)
+│                       
+│                   except Exception as e:
+│                       logger.error(f"[{job_id}] Critical error processing message. Publishing error result.", exc_info=True)
+│                       if self.result_publisher:
+│                           await self.result_publisher.publish_error_result(job_id, f"An unexpected internal executor error occurred: {type(e).__name__}")
+│                       
+│                       # Step 3 (Error Path): Nack the message to requeue it for another try.
+│                       # Set requeue=False if you have a Dead Letter Queue and want to send it there instead.
+│                       await message.nack(requeue=True)
+│                       
+│                   finally:
+│                       # Step 4: Always clean up the task from the registry.
+│                       if job_id in RUNNING_JOBS:
+│                           del RUNNING_JOBS[job_id]
+│                           logger.info(f"[{job_id}] Task de-registered.")
+│               # --- END OF REWRITTEN METHOD ---
+│           
+│               async def run(self):
+│                   """Starts the worker and listens for messages indefinitely."""
+│                   while True:
+│                       try:
+│                           self.connection = await aio_pika.connect_robust(config.RABBITMQ_URL, loop=asyncio.get_event_loop())
+│                           async with self.connection:
+│                               self.result_publisher = ResultPublisher(self.connection)
+│                               channel = await self.connection.channel()
+│                               
+│                               await channel.set_qos(prefetch_count=self.prefetch_count)
+│                               logger.info(f"Worker QoS set to {self.prefetch_count}. Ready to process jobs concurrently.")
+│                               
+│                               exchange = await channel.declare_exchange('inference_exchange', aio_pika.ExchangeType.TOPIC, durable=True)
+│                               queue = await channel.declare_queue('inference_jobs_queue', durable=True)
+│                               await queue.bind(exchange, 'inference.job.start')
+│                               
+│                               logger.info(" [*] Inference Executor Worker is ready and waiting for jobs.")
+│                               
+│                               async with queue.iterator() as queue_iter:
+│                                   async for message in queue_iter:
+│                                       asyncio.create_task(self.process_message(message))
+│           
+│                       except aio_pika.exceptions.AMQPConnectionError as e:
+│                           logger.error(f"RabbitMQ connection lost: {e}. Retrying in 5 seconds...")
+│                           await asyncio.sleep(5)
+│           
+│           
+│       ]
+│   generate_protos.py
+│   [
+│       import os
+│       import subprocess
+│       import fileinput
+│       import sys
+│       from pathlib import Path
+│       
+│       def main():
+│           """Generates and fixes gRPC stubs for the executor."""
+│           root_dir = Path(__file__).parent
+│           proto_path = root_dir / 'app' / 'internals' / 'protos'
+│           output_path = root_dir / 'app' / 'internals' / 'generated'
+│           
+│           print(f"Project root directory: {root_dir}")
+│           print(f"Proto source directory: {proto_path}")
+│           print(f"Generated code output directory: {output_path}")
+│       
+│           if not proto_path.is_dir():
+│               print(f"ERROR: Proto path '{proto_path}' does not exist.", file=sys.stderr)
+│               sys.exit(1)
+│       
+│           output_path.mkdir(parents=True, exist_ok=True)
+│           (output_path / '__init__.py').touch()
+│       
+│           proto_files = [f for f in proto_path.iterdir() if f.suffix == '.proto']
+│           if not proto_files:
+│               print('No .proto files found. Exiting.')
+│               return
+│               
+│           command = [
+│               sys.executable,  # Use the same python interpreter running the script
+│               '-m',
+│               'grpc_tools.protoc',
+│               f'--proto_path={proto_path}',
+│               f'--python_out={output_path}',
+│               f'--grpc_python_out={output_path}',
+│           ] + [str(pf) for pf in proto_files]
+│       
+│           print(f"Running command: {' '.join(command)}")
+│           try:
+│               subprocess.run(command, check=True, capture_output=True, text=True)
+│           except subprocess.CalledProcessError as e:
+│               print("ERROR: Failed to generate gRPC stubs.", file=sys.stderr)
+│               print(e.stderr, file=sys.stderr)
+│               sys.exit(1)
+│       
+│           print('Successfully generated gRPC stubs. Now fixing imports...')
+│           for proto_file in proto_files:
+│               base_name = proto_file.stem
+│               grpc_file_path = output_path / f'{base_name}_pb2_grpc.py'
+│               
+│               with fileinput.FileInput(str(grpc_file_path), inplace=True) as file:
+│                   for line in file:
+│                       if line.strip() == f'import {base_name}_pb2 as {base_name}__pb2':
+│                           print(f'from . import {base_name}_pb2 as {base_name}__pb2', end='\n')
+│                       else:
+│                           print(line, end='')
+│       
+│           print('Imports fixed successfully.')
+│       
+│       if __name__ == '__main__':
+│           main()
+│   ]
+│   main.py
+│   [
+│       # MS6/main.py
+│       
+│       import asyncio
+│       from app.logging_config import setup_logging, logger
+│       from app.messaging.worker import RabbitMQWorker
+│       from app.messaging.cancellation_listener import CancellationListener
+│       
+│       def main():
+│           """
+│           The main entry point for the Inference Executor (MS6) application.
+│           It launches the main worker and the cancellation listener in parallel.
+│           """
+│           setup_logging() # Configure the logger first
+│           worker_instance = RabbitMQWorker()
+│           cancellation_listener = CancellationListener()
+│       
+│           async def run_all():
+│               """A wrapper to run multiple asyncio tasks concurrently."""
+│               # Create tasks for both workers so they can run indefinitely
+│               worker_task = asyncio.create_task(worker_instance.run())
+│               listener_task = asyncio.create_task(cancellation_listener.run())
+│               
+│               logger.info("Inference Executor Worker and Cancellation Listener are now running.")
+│               
+│               # This will run until one of the tasks finishes or is cancelled.
+│               await asyncio.gather(worker_task, listener_task)
+│       
+│           try:
+│               logger.info("Starting all MS6 services...")
+│               asyncio.run(run_all())
+│           except KeyboardInterrupt:
+│               logger.info("Services shutting down gracefully due to user request (CTRL+C).")
+│           except Exception as e:
+│               logger.critical(f"FATAL: A service crashed during startup: {e}", exc_info=True)
+│       
+│       if __name__ == "__main__":
+│           main()
+│   ]
+│   project meta gen.py
+│   [
+│       import os
+│       import mimetypes
+│       import glob
+│       import re
+│       
+│       def get_next_sequence_number():
+│           """Find the next available sequence number for the output file."""
+│           script_dir = os.path.abspath(os.path.dirname(__file__))
+│           pattern = os.path.join(script_dir, "project_structure_*.txt")
+│           existing_files = glob.glob(pattern)
+│           
+│           if not existing_files:
+│               return 1
+│           
+│           # Extract sequence numbers from existing files
+│           sequence_numbers = []
+│           for file_path in existing_files:
+│               basename = os.path.basename(file_path)
+│               match = re.search(r'project_structure_(\d+)\.txt', basename)
+│               if match:
+│                   sequence_numbers.append(int(match.group(1)))
+│           
+│           if not sequence_numbers:
+│               return 1
+│           
+│           # Return the next number in sequence
+│           return max(sequence_numbers) + 1
+│       
+│       def generate_project_structure():
+│           """Generate a text file containing the project structure with file contents."""
+│           # Get the absolute path of the script's directory
+│           script_dir = os.path.abspath(os.path.dirname(__file__))
+│           # Change to that directory to ensure we're working only there
+│           os.chdir(script_dir)
+│           
+│           # Generate a unique filename with sequence number
+│           seq_num = get_next_sequence_number()
+│           output_file = os.path.join(script_dir, f"project_structure_{seq_num}.txt")
+│           
+│           with open(output_file, 'w', encoding='utf-8', errors='replace') as f:
+│               # Get items in the script directory only, excluding specified patterns
+│               items = get_directory_items(script_dir, output_file)
+│               
+│               # Process each item at root level
+│               for i, item in enumerate(items):
+│                   is_last = i == len(items) - 1
+│                   
+│                   if os.path.isdir(os.path.join(script_dir, item)):
+│                       # It's a directory
+│                       if is_last:
+│                           f.write(f"└───{item}\n")
+│                           process_directory(os.path.join(script_dir, item), f, "    ", output_file, script_dir)
+│                       else:
+│                           f.write(f"├───{item}\n")
+│                           process_directory(os.path.join(script_dir, item), f, "│   ", output_file, script_dir)
+│                   else:
+│                       # It's a file - at root level, format as in the example
+│                       f.write(f"│   {item}\n")
+│                       # Include file content
+│                       content = read_file_content(os.path.join(script_dir, item))
+│                       f.write(f"│   [\n")
+│                       content_lines = content.split('\n')
+│                       for line in content_lines:
+│                           f.write(f"│       {line}\n")
+│                       f.write(f"│   ]\n")
+│           
+│           print(f"Project structure has been written to {output_file}")
+│       
+│       def should_exclude(item_path):
+│           """Check if an item should be excluded based on patterns."""
+│           # Exclude __pycache__ directories
+│           if os.path.isdir(item_path) and "__pycache__" in item_path:
+│               return True
+│           
+│           # Exclude migrations directories
+│           if os.path.isdir(item_path) and "migrations" in item_path:
+│               return True
+│           
+│           # Exclude .pyc files
+│           if item_path.endswith('.pyc'):
+│               return True
+│           
+│           # Exclude all project_structure files
+│           if os.path.basename(item_path).startswith("project_structure_") and item_path.endswith(".txt"):
+│               return True
+│           
+│           return False
+│       
+│       def get_directory_items(dir_path, output_file):
+│           """Get sorted list of items in a directory, excluding the output file and specified patterns."""
+│           # Get absolute path to output file to exclude it
+│           abs_output_path = os.path.abspath(output_file)
+│           
+│           try:
+│               # List directory contents
+│               items = sorted(os.listdir(dir_path))
+│               
+│               # Filter out the output file itself and items matching exclude patterns
+│               filtered_items = []
+│               for item in items:
+│                   item_path = os.path.join(dir_path, item)
+│                   
+│                   # Skip the output file
+│                   if os.path.abspath(item_path) == abs_output_path:
+│                       continue
+│                       
+│                   # Skip symlinks that might point outside
+│                   if os.path.islink(item_path):
+│                       continue
+│                       
+│                   # Skip items matching exclude patterns
+│                   if should_exclude(item_path):
+│                       continue
+│                       
+│                   filtered_items.append(item)
+│               
+│               return filtered_items
+│           except Exception as e:
+│               print(f"Error listing directory {dir_path}: {e}")
+│               return []
+│       
+│       def is_binary_file(file_path):
+│           """Determine if a file is binary or text."""
+│           # Initialize mimetypes
+│           if not mimetypes.inited:
+│               mimetypes.init()
+│           
+│           # Check by mime type first
+│           mime_type, _ = mimetypes.guess_type(file_path)
+│           if mime_type and not mime_type.startswith(('text/', 'application/json', 'application/xml', 'application/javascript')):
+│               return True
+│               
+│           # Fallback: check for null bytes
+│           try:
+│               with open(file_path, 'rb') as f:
+│                   chunk = f.read(4096)
+│                   return b'\0' in chunk
+│           except Exception:
+│               return True  # If we can't read it, assume binary
+│       
+│       def read_file_content(file_path, max_length=500000):
+│           """Read content from a file, handling binary files and errors."""
+│           try:
+│               # Check if binary
+│               if is_binary_file(file_path):
+│                   return "[Binary file - content not shown]"
+│                   
+│               # Read text file
+│               with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+│                   content = f.read(max_length + 1)
+│                   
+│               # Handle truncation
+│               if len(content) > max_length:
+│                   content = content[:max_length] + "... [truncated]"
+│                   
+│               # Return raw content without escaping special characters
+│               return content
+│           except Exception as e:
+│               return f"[Error reading file: {str(e)}]"
+│       
+│       def process_directory(dir_path, file_obj, indent, output_file, script_dir):
+│           """Recursively process a directory and write its structure to the file."""
+│           # Safety check - ensure we're still within the script directory
+│           rel_path = os.path.relpath(dir_path, script_dir)
+│           if rel_path.startswith('..') or rel_path == '.':
+│               return  # Don't process if it's outside our script directory
+│           
+│           try:
+│               # List directory contents
+│               items = get_directory_items(dir_path, output_file)
+│               
+│               # Process each item
+│               for i, item in enumerate(items):
+│                   item_path = os.path.join(dir_path, item)
+│                   is_last = i == len(items) - 1
+│                   
+│                   # Safety check - don't follow symlinks or items outside our script directory
+│                   if os.path.islink(item_path):
+│                       continue
+│                       
+│                   rel_path = os.path.relpath(item_path, script_dir)
+│                   if rel_path.startswith('..'):
+│                       continue
+│                   
+│                   if os.path.isdir(item_path):
+│                       # It's a directory
+│                       if is_last:
+│                           file_obj.write(f"{indent}└───{item}\n")
+│                           process_directory(item_path, file_obj, indent + "    ", output_file, script_dir)
+│                       else:
+│                           file_obj.write(f"{indent}├───{item}\n")
+│                           process_directory(item_path, file_obj, indent + "│   ", output_file, script_dir)
+│                   else:
+│                       # It's a file
+│                       file_obj.write(f"{indent}{item}\n")
+│                       # Include file content
+│                       content = read_file_content(item_path)
+│                       file_obj.write(f"{indent}[\n")
+│                       content_lines = content.split('\n')
+│                       for line in content_lines:
+│                           file_obj.write(f"{indent}    {line}\n")
+│                       file_obj.write(f"{indent}]\n")
+│           except PermissionError:
+│               file_obj.write(f"{indent}[Permission denied]\n")
+│           except Exception as e:
+│               file_obj.write(f"{indent}[Error: {str(e)}]\n")
+│       
+│       if __name__ == "__main__":
+│           generate_project_structure()
+│   ]
+│   requirements.txt
+│   [
+│       aio-pika
+│       grpcio
+│       grpcio-tools
+│       protobuf
+│       google-api-python-client
+│       python-dotenv
+│       httpx
+│       pydantic
+│       langchain
+│       langchain-core
+│       langchain-openai
+│       langchain-anthropic
+│       langchain-google-genai
+│       langchain-community
+│       pika
+│       langchain-ollama
+│   ]
